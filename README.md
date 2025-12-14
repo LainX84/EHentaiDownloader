@@ -23,7 +23,7 @@
 
 ```
 project-root/
-├── helpers/
+├── src/
 │ ├── crawlers/
 │ │ ├── crawler.py           # Main crawler module used across the project
 │ │ └── crawler_utils.py     # Utilities for extracting media download links
