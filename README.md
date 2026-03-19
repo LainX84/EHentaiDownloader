@@ -19,7 +19,9 @@
 - `requests` - for HTTP requests
 - `rich` - for progress display in the terminal
 
-## Directory Structure
+<details>
+
+<summary>Show directory structure</summary>
 
 ```
 project-root/
@@ -42,6 +44,8 @@ project-root/
 ├── URLs.txt                 # Text file listing album URLs to be downloaded
 └── session_log.txt          # Log file for recording session details
 ```
+
+</details>
 
 ## Installation
 
