@@ -29,7 +29,9 @@ class Crawler:
         live_manager: LiveManager,
     ) -> None:
         """Initialize the Crawler with album URL, initial soup, and live manager."""
-        self.url = url
+        parsed = urlparse(url)
+        path = parsed.path if parsed.path.endswith("/") else f"{parsed.path}/"
+        self.url = f"{parsed.scheme}://{parsed.netloc}{path}"
         self.initial_soup = initial_soup
         self.live_manager = live_manager
         self.album_pages = self._generate_album_pages()
@@ -53,22 +55,42 @@ class Crawler:
         )
         return album_pages_soups
 
+    def get_reloaded_page(self, picture_page: str) -> str | None:
+        """Generate reloaded image page URL for a single picture page."""
+        try:
+            soup = fetch_page(picture_page)
+            nl_container = soup.find("a", {"id": "loadfail", "onclick": True})
+            if not nl_container or "onclick" not in nl_container.attrs:
+                self.live_manager.update_log(
+                    "Missing 'nl' container",
+                    f"No 'loadfail' link with 'onclick' found for {picture_page}.",
+                )
+                return None
+
+            match = re.search(r"nl\('([^']+)'\)", nl_container["onclick"])
+            if not match:
+                self.live_manager.update_log(
+                    "Missing 'nl' value",
+                    f"No 'nl' value found in onclick for {picture_page}.",
+                )
+                return None
+
+            nl_value = match.group(1)
+            return generate_reloaded_page(picture_page, nl_value)
+        except Exception as err:
+            self.live_manager.update_log(
+                "Crawler error",
+                f"Error getting reloaded page for {picture_page}: {err}",
+            )
+            return None
+
     def get_reloaded_pages(self, picture_pages: list[str]) -> list[str]:
         """Generate reloaded image page URLs."""
         reloaded_pages = []
         for picture_page in picture_pages:
-            soup = fetch_page(picture_page)
-            nl_container = soup.find("a", {"id": "loadfail", "onclick": True})
-            nl_value = re.search(r"nl\('([^']+)'\)", nl_container["onclick"]).group(1)
-
-            if nl_value:
-                reloaded_page = generate_reloaded_page(picture_page, nl_value)
+            reloaded_page = self.get_reloaded_page(picture_page)
+            if reloaded_page:
                 reloaded_pages.append(reloaded_page)
-            else:
-                self.live_manager.update_log(
-                    "Missing 'nl' value", f"No 'nl' value found for {picture_page}.",
-                )
-
         return reloaded_pages
 
     def _generate_album_pages(self) -> list[str]:
@@ -79,9 +101,20 @@ class Crawler:
             {"href": pattern, "onclick": "return false"},
         )
 
-        last_page_url = next_pages[-2].get("href")
-        match = re.search(r"\?p=(\d+)", last_page_url)
-        last_page = int(match.group(1))
-        album_pages = [f"{self.url}?p={page}" for page in range(1, last_page)]
-        album_pages.append(last_page_url)
+        if not next_pages:
+            return []
+
+        page_numbers = []
+        for a in next_pages:
+            href = a.get("href")
+            if href:
+                match = re.search(r"\?p=(\d+)", href)
+                if match:
+                    page_numbers.append(int(match.group(1)))
+
+        if not page_numbers:
+            return []
+
+        last_page = max(page_numbers)
+        album_pages = [f"{self.url}?p={page}" for page in range(1, last_page + 1)]
         return album_pages
