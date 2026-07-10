@@ -8,6 +8,7 @@ tracking.
 import random
 import time
 from pathlib import Path
+from urllib.parse import urlparse
 
 import requests
 from requests import Response, Session
@@ -35,7 +36,9 @@ class AlbumDownloader:
 
     def __init__(self, url: str, live_manager: LiveManager) -> None:
         """Initialize the AlbumDownloader with album URL and live manager."""
-        self.url = url
+        parsed = urlparse(url)
+        path = parsed.path if parsed.path.endswith("/") else f"{parsed.path}/"
+        self.url = f"{parsed.scheme}://{parsed.netloc}{path}"
         self.live_manager = live_manager
         self.initial_soup = fetch_page(self.url)
         self.crawler = Crawler(
