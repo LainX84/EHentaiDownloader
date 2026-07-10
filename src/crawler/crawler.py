@@ -29,7 +29,9 @@ class Crawler:
         live_manager: LiveManager,
     ) -> None:
         """Initialize the Crawler with album URL, initial soup, and live manager."""
-        self.url = url
+        parsed = urlparse(url)
+        path = parsed.path if parsed.path.endswith("/") else f"{parsed.path}/"
+        self.url = f"{parsed.scheme}://{parsed.netloc}{path}"
         self.initial_soup = initial_soup
         self.live_manager = live_manager
         self.album_pages = self._generate_album_pages()
@@ -79,9 +81,20 @@ class Crawler:
             {"href": pattern, "onclick": "return false"},
         )
 
-        last_page_url = next_pages[-2].get("href")
-        match = re.search(r"\?p=(\d+)", last_page_url)
-        last_page = int(match.group(1))
-        album_pages = [f"{self.url}?p={page}" for page in range(1, last_page)]
-        album_pages.append(last_page_url)
+        if not next_pages:
+            return []
+
+        page_numbers = []
+        for a in next_pages:
+            href = a.get("href")
+            if href:
+                match = re.search(r"\?p=(\d+)", href)
+                if match:
+                    page_numbers.append(int(match.group(1)))
+
+        if not page_numbers:
+            return []
+
+        last_page = max(page_numbers)
+        album_pages = [f"{self.url}?p={page}" for page in range(1, last_page + 1)]
         return album_pages
