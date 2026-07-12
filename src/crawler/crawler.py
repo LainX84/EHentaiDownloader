@@ -8,6 +8,7 @@ import re
 from urllib.parse import urlparse
 
 from bs4 import BeautifulSoup
+from requests import Session
 
 from src.general_utils import fetch_page
 from src.managers.live_manager import LiveManager
@@ -27,6 +28,7 @@ class Crawler:
         url: str,
         initial_soup: BeautifulSoup,
         live_manager: LiveManager,
+        session: Session,
     ) -> None:
         """Initialize the Crawler with album URL, initial soup, and live manager."""
         parsed = urlparse(url)
@@ -34,6 +36,7 @@ class Crawler:
         self.url = f"{parsed.scheme}://{parsed.netloc}{path}"
         self.initial_soup = initial_soup
         self.live_manager = live_manager
+        self.session = session
         self.album_pages = self._generate_album_pages()
 
     def get_album_name(self) -> str:
@@ -81,15 +84,19 @@ class Crawler:
         """Fetch all album pages and return their parsed HTML content."""
         album_pages_soups = [self.initial_soup]
         album_pages_soups.extend(
-            fetch_page(album_page)
+            fetch_page(album_page, session=self.session, referer=self.url)
             for album_page in self.album_pages
         )
         return album_pages_soups
 
-    def get_reloaded_page(self, picture_page: str) -> str | None:
+    def get_reloaded_page(self, picture_page: str, referer: str | None = None) -> str | None:
         """Generate reloaded image page URL for a single picture page."""
         try:
-            soup = fetch_page(picture_page)
+            soup = fetch_page(
+                picture_page,
+                session=self.session,
+                referer=referer or self.url,
+            )
             nl_container = soup.find("a", {"id": "loadfail", "onclick": True})
             if not nl_container or "onclick" not in nl_container.attrs:
                 self.live_manager.update_log(
@@ -119,7 +126,7 @@ class Crawler:
         """Generate reloaded image page URLs."""
         reloaded_pages = []
         for picture_page in picture_pages:
-            reloaded_page = self.get_reloaded_page(picture_page)
+            reloaded_page = self.get_reloaded_page(picture_page, referer=self.url)
             if reloaded_page:
                 reloaded_pages.append(reloaded_page)
         return reloaded_pages
