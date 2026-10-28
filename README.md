@@ -2,7 +2,7 @@
 
 > A Python tool to download E-Hentai and ExHentai galleries, with a simple desktop GUI and a command-line interface.
 
-![Demo](assets/demo.gif)
+![Demo](assets/demo.jpg)
 
 > This project is a fork of [Lysagxra/EHentaiDownloader](https://github.com/Lysagxra/EHentaiDownloader), extended with a GUI, image format conversion, sequential renaming, smarter retries and more. It is distributed under the same license (GPL-3.0).
 
