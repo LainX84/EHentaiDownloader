@@ -4,17 +4,19 @@ This module provides the `Crawler` class, which is responsible for parsing album
 extracting image links, and handling reloaded pages.
 """
 
+import random
 import re
+import time
 from urllib.parse import urlparse
 
 from bs4 import BeautifulSoup
 from requests import Session
 
-from src.config import NL_VALUE_PATTERN
+from src.config import ALBUM_PAGE_DELAY
 from src.general_utils import fetch_page
 from src.managers.live_manager import LiveManager
 
-from .crawler_utils import generate_reloaded_page
+from .crawler_utils import generate_reloaded_page, get_picture_pages
 
 
 class Crawler:
@@ -81,13 +83,71 @@ class Crawler:
 
         return f"{album_name}_{url_path_id}"
 
+    def get_clean_album_name(self) -> str:
+        """Extract only the original album title without url_path_id."""
+        title_container = self.initial_soup.find("h1", {"id": "gn"})
+        if not title_container:
+            title_container = self.initial_soup.find("h1", {"id": "gj"})
+
+        if title_container:
+            return title_container.get_text().strip()
+
+        title_tag = self.initial_soup.find("title")
+        page_title = title_tag.get_text(strip=True) if title_tag else ""
+        if page_title and page_title != "E-Hentai Galleries":
+            return page_title.replace(" - E-Hentai Galleries", "").strip()
+
+        return self.get_album_name()
+
+    def get_total_images(self) -> int:
+        """Extract the total number of images/pages in the album."""
+        # 1. Look in the #gdd table for 'Length:'
+        gdd = self.initial_soup.find("div", {"id": "gdd"})
+        if gdd:
+            for tr in gdd.find_all("tr"):
+                tds = tr.find_all("td")
+                if len(tds) >= 2 and "length" in tds[0].get_text().lower():
+                    text = tds[1].get_text()
+                    match = re.search(r"(\d+)\s*pages?", text, re.IGNORECASE)
+                    if match:
+                        return int(match.group(1))
+
+            match = re.search(r"Length:\s*</td>\s*<td[^>]*>\s*(\d+)\s*pages?", str(gdd), re.IGNORECASE)
+            if match:
+                return int(match.group(1))
+
+            match = re.search(r"Length:\s*(\d+)\s*pages?", gdd.get_text(), re.IGNORECASE)
+            if match:
+                return int(match.group(1))
+
+        # 2. Look for .gpc ("Showing 1 - 20 of 45 images")
+        gpc = self.initial_soup.find("p", class_="gpc")
+        if gpc:
+            match = re.search(r"of\s+([\d,]+)\s+images?", gpc.get_text(), re.IGNORECASE)
+            if match:
+                return int(match.group(1).replace(",", ""))
+
+        # 3. Fallback: check picture links on the initial page
+        gdt = self.initial_soup.find("div", {"id": "gdt"})
+        containers = gdt.find_all("a", {"href": True}) if gdt else self.initial_soup.find_all("a", {"href": True})
+        picture_pages = get_picture_pages(containers)
+        max_idx = 0
+        for p in picture_pages:
+            m = re.search(r"/(\d+)-(\d+)(?:\?|$)", p)
+            if m:
+                max_idx = max(max_idx, int(m.group(2)))
+
+        return max_idx
+
     def collect_album_pages_soups(self) -> list[BeautifulSoup]:
         """Fetch all album pages and return their parsed HTML content."""
         album_pages_soups = [self.initial_soup]
-        album_pages_soups.extend(
-            fetch_page(album_page, session=self.session, referer=self.url)
-            for album_page in self.album_pages
-        )
+        for album_page in self.album_pages:
+            # Short courtesy pause so large galleries don't burst dozens of requests
+            time.sleep(random.uniform(*ALBUM_PAGE_DELAY))  # noqa: S311
+            album_pages_soups.append(
+                fetch_page(album_page, session=self.session, referer=self.url),
+            )
         return album_pages_soups
 
     def get_reloaded_page(self, picture_page: str, referer: str | None = None) -> str | None:
@@ -99,7 +159,12 @@ class Crawler:
                 referer=referer or self.url,
             )
             nl_container = soup.find("a", {"id": "loadfail", "onclick": True})
-            nl_value = re.search(NL_VALUE_PATTERN, nl_container.get("onclick")).group(1)
+            if not nl_container or "onclick" not in nl_container.attrs:
+                self.live_manager.update_log(
+                    "Missing 'nl' container",
+                    f"No 'loadfail' link with 'onclick' found for {picture_page}.",
+                )
+                return None
 
             match = re.search(r"nl\('([^']+)'\)", nl_container["onclick"])
             if not match:

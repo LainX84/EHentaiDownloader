@@ -5,7 +5,7 @@ progress and logging events. It initializes necessary managers for live updates 
 handles command-line execution.
 
 Usage:
-    python3 script.py <album_url>
+    python downloader.py <album_url>
 """
 
 from __future__ import annotations
@@ -13,123 +13,133 @@ from __future__ import annotations
 import logging
 import sys
 from pathlib import Path
+from urllib.parse import urlparse
 
-from src.config import RETRY_FILE, URL_RETRY_ATTEMPTS
 from src.downloader.album_downloader import AlbumDownloader
-from src.file_utils import read_file, write_file
+from src.config import DEFAULT_IMAGE_FORMAT, FAILED_URLS_FILE
+from src.file_utils import append_session_banner, read_file, write_file
 from src.general_utils import clear_terminal
 from src.managers.live_manager import LiveManager
 from src.managers.log_manager import LoggerTable
 from src.managers.progress_manager import ProgressManager
 
 
-def _unique_preserve_order(urls: list[str]) -> list[str]:
-    """Return URLs without duplicates while preserving input order."""
-    unique_urls: list[str] = []
-    seen = set()
-    for url in urls:
-        if url and url not in seen:
-            unique_urls.append(url)
-            seen.add(url)
-    return unique_urls
+def _normalize_album_url(url: str) -> str:
+    """Normalize album URL by stripping whitespace and ensuring trailing slash."""
+    url = url.strip()
+    if not url:
+        return ""
+    try:
+        parsed = urlparse(url)
+        if parsed.scheme and parsed.netloc and "/g/" in parsed.path:
+            path = parsed.path if parsed.path.endswith("/") else f"{parsed.path}/"
+            return f"{parsed.scheme}://{parsed.netloc}{path}"
+    except Exception:
+        pass
+    return url
 
 
-def _read_urls_if_exists(filename: str) -> list[str]:
-    """Read URLs from a file if it exists, otherwise return an empty list."""
-    file_path = Path(filename)
+def _album_key(url: str) -> str | None:
+    """Extract a canonical album key (e.g. '2068624_846fc2d3b5') to identify unique albums."""
+    try:
+        parsed = urlparse(url)
+        parts = [p for p in parsed.path.split("/") if p]
+        if len(parts) >= 3 and parts[0] == "g":
+            return f"{parts[1]}_{parts[2]}"
+    except Exception:
+        pass
+    return None
+
+
+def _dedupe_keep_order(urls: list[str]) -> list[str]:
+    """Return URLs deduplicated while preserving insertion order and album uniqueness."""
+    seen_urls: set[str] = set()
+    seen_keys: set[str] = set()
+    output: list[str] = []
+
+    for raw_url in urls:
+        norm_url = _normalize_album_url(raw_url)
+        if not norm_url or norm_url in seen_urls:
+            continue
+        key = _album_key(norm_url)
+        if key:
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+        seen_urls.add(norm_url)
+        output.append(norm_url)
+    return output
+
+
+def load_failed_urls() -> list[str]:
+    """Load failed album URLs from disk if the file exists."""
+    file_path = Path(FAILED_URLS_FILE)
     if not file_path.exists():
         return []
-    return [line.strip() for line in read_file(filename) if line.strip()]
+    return _dedupe_keep_order([url for url in read_file(FAILED_URLS_FILE) if url.strip()])
 
 
-def _write_urls(filename: str, urls: list[str]) -> None:
-    """Write URLs to file, one URL per line."""
-    content = "\n".join(urls)
+def save_failed_urls(urls: list[str]) -> None:
+    """Persist failed album URLs for future retries."""
+    normalized = _dedupe_keep_order([url for url in urls if url.strip()])
+    content = "\n".join(normalized)
     if content:
         content += "\n"
-    write_file(filename, content)
+    write_file(FAILED_URLS_FILE, content)
 
 
-def load_retry_urls() -> list[str]:
-    """Load retry URLs from retry.txt, creating the file if needed."""
-    retry_path = Path(RETRY_FILE)
-    if not retry_path.exists():
-        # Create an empty retry file so first-time runs can persist failures safely.
-        retry_path.touch(exist_ok=True)
-    return _read_urls_if_exists(RETRY_FILE)
+def update_failed_url(url: str, has_failures: bool) -> None:
+    """Add or remove an album URL from the failed URL registry."""
+    key = _album_key(url)
+    current = load_failed_urls()
 
+    if has_failures:
+        if key:
+            filtered = [item for item in current if _album_key(item) != key]
+        else:
+            filtered = [item for item in current if _normalize_album_url(item) != _normalize_album_url(url)]
+        save_failed_urls(filtered + [url])
+        return
 
-def build_download_queue(primary_urls: list[str]) -> list[str]:
-    """Build a queue from URLs.txt plus retry.txt, deduplicated in stable order."""
-    retry_urls = load_retry_urls()
-    return _unique_preserve_order(primary_urls + retry_urls)
-
-
-def update_retry_file(successful_urls: list[str], failed_urls: list[str]) -> None:
-    """Persist unresolved URLs in retry.txt while removing successful ones."""
-    existing_retry_urls = load_retry_urls()
-    successful_set = set(successful_urls)
-    failed_unique = _unique_preserve_order(failed_urls)
-
-    pending_urls = [url for url in existing_retry_urls if url not in successful_set]
-    for failed_url in failed_unique:
-        if failed_url not in pending_urls:
-            pending_urls.append(failed_url)
-
-    _write_urls(RETRY_FILE, pending_urls)
+    if key:
+        save_failed_urls([item for item in current if _album_key(item) != key])
+    else:
+        save_failed_urls([item for item in current if _normalize_album_url(item) != _normalize_album_url(url)])
 
 
 def download_album(
     url: str,
     live_manager: LiveManager,
-    attempts: int = URL_RETRY_ATTEMPTS,
-) -> bool:
-    """Download one album with URL-level retries.
+    image_format: str = DEFAULT_IMAGE_FORMAT,
+    rename_sequential: bool | None = None,
+) -> tuple[bool, list[str]]:
+    """Download an album using the provided live manager.
 
-    Returns True on success and False after all attempts fail.
+    Returns:
+        (success, failed_items) – success is True when nothing failed,
+        failed_items is the list of picture-page / download URLs that failed.
     """
-    attempts = max(1, attempts)
-    for attempt in range(1, attempts + 1):
-        if attempt > 1:
-            live_manager.update_log(
-                "Album retry",
-                f"Retrying {url} ({attempt}/{attempts})",
-            )
+    failed_items: list[str] = []
+    try:
+        album_downloader = AlbumDownloader(
+            url=url,
+            live_manager=live_manager,
+            image_format=image_format,
+            rename_sequential=rename_sequential,
+        )
+        with live_manager.live:
+            failed_items = album_downloader.download_album()
+            live_manager.stop()
+            has_failures = bool(failed_items)
+            update_failed_url(url, has_failures)
+            return not has_failures, failed_items
 
-        try:
-            album_downloader = AlbumDownloader(url=url, live_manager=live_manager)
-            album_downloader.download_album()
-            return True
-        except KeyboardInterrupt:
-            sys.exit(1)
-        except Exception as err:
-            if attempt >= attempts:
-                live_manager.update_log(
-                    "Album failed",
-                    f"Download failed for {url} after {attempts} attempt(s): {err}",
-                )
-                return False
-
-            live_manager.update_log(
-                "Album attempt failed",
-                f"Attempt {attempt}/{attempts} failed for {url}: {err}",
-            )
-
-    return False
-
-
-def download_albums(urls: list[str], live_manager: LiveManager) -> tuple[list[str], list[str]]:
-    """Download a list of album URLs and return (successful_urls, failed_urls)."""
-    successful_urls: list[str] = []
-    failed_urls: list[str] = []
-
-    for url in urls:
-        if download_album(url, live_manager):
-            successful_urls.append(url)
-        else:
-            failed_urls.append(url)
-
-    return successful_urls, failed_urls
+    except KeyboardInterrupt:
+        sys.exit(1)
+    except Exception as exc:
+        logging.error("Failed to process album %s — %s", url, exc)
+        update_failed_url(url, has_failures=True)
+        return False, failed_items
 
 
 def initialize_managers() -> LiveManager:
@@ -148,15 +158,12 @@ def main() -> None:
         sys.exit(1)
 
     clear_terminal()
-    live_manager = initialize_managers()
     url = sys.argv[1]
+    append_session_banner(f"SINGLE CLI START (downloader.py: {url})")
+    live_manager = initialize_managers()
+    ok, _ = download_album(url, live_manager)
+    append_session_banner(f"SINGLE CLI END (downloader.py: {url}) - Result: {'OK' if ok else 'ERRORS'}")
 
-    with live_manager.live:
-        success = download_album(url, live_manager)
-        failed_urls = [] if success else [url]
-        successful_urls = [url] if success else []
-        update_retry_file(successful_urls=successful_urls, failed_urls=failed_urls)
-        live_manager.stop()
 
 if __name__ == "__main__":
     main()

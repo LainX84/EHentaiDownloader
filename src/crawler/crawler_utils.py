@@ -4,17 +4,38 @@ This module provides helper functions for extracting picture page URLs and modif
 them to include reloaded parameters.
 """
 
+from __future__ import annotations
+
+import re
 from urllib.parse import parse_qs, urlencode, urlparse
 
-from bs4 import Tag
+from bs4 import BeautifulSoup, Tag
+
+PICTURE_PAGE_PATTERN = re.compile(r"/s/[0-9a-fA-F]+/\d+-\d+", re.IGNORECASE)
 
 
 def get_picture_pages(containers: list[Tag]) -> list[str]:
-    """Extract picture page URLs from a list of container elements."""
-    return [
-        container.get("href")
-        for container in containers if "/s/" in container.get("href")
-    ]
+    """Extract picture page URLs from a list of container elements, preserving order without duplicates."""
+    seen: set[str] = set()
+    pages: list[str] = []
+    for container in containers:
+        href = container.get("href")
+        if href and PICTURE_PAGE_PATTERN.search(href) and href not in seen:
+            seen.add(href)
+            pages.append(href)
+    return pages
+
+
+NL_PATTERN = re.compile(r"nl\('([^']+)'\)")
+
+
+def extract_nl_value(soup: BeautifulSoup) -> str | None:
+    """Return the 'nl' token of the "Reload broken image" link, used to ask for another image server."""
+    container = soup.find("a", {"id": "loadfail", "onclick": True})
+    if not container:
+        return None
+    match = NL_PATTERN.search(container.get("onclick", ""))
+    return match.group(1) if match else None
 
 
 def generate_reloaded_page(picture_page: str, nl_value: str) -> str:

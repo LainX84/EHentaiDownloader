@@ -9,50 +9,70 @@ Usage:
     'URLs.txt' and log the session activities in 'session.log'.
 """
 
+import asyncio
 import sys
+from pathlib import Path
 
 from downloader import (
-    build_download_queue,
-    download_albums,
+    _dedupe_keep_order,
+    download_album,
     initialize_managers,
-    update_retry_file,
+    load_failed_urls,
+    save_failed_urls,
 )
-from src.config import SESSION_LOG, URLS_FILE
-from src.file_utils import read_file, write_file
+from src.config import URLS_FILE
+from src.file_utils import append_session_banner, read_file, write_file
 from src.general_utils import clear_terminal
 
 
-def process_urls(urls: list[str]) -> None:
-    """Download queued URLs and persist failures into retry.txt."""
+def merge_urls(urls: list[str], retry_urls: list[str]) -> list[str]:
+    """Merge regular and retry URL lists with de-duplication and stable ordering.
+
+    Uses the same album-aware normalization as the failed queue, so the same gallery
+    written with/without trailing slash (or on another domain path) is processed once.
+    """
+    return _dedupe_keep_order(urls + retry_urls)
+
+
+async def process_urls(urls: list[str]) -> list[str]:
+    """Validate and downloads items for a list of URLs."""
     live_manager = initialize_managers()
+    failed_urls: list[str] = []
 
-    with live_manager.live:
-        successful_urls, failed_urls = download_albums(urls, live_manager)
-        update_retry_file(successful_urls=successful_urls, failed_urls=failed_urls)
+    for url in urls:
+        is_success, _ = download_album(url, live_manager)
+        if not is_success:
+            failed_urls.append(url)
 
-        live_manager.stop()
+    return failed_urls
 
 
-def main() -> None:
+async def main() -> None:
     """Run the script."""
-    # Clear the terminal and session log file
+    # Clear the terminal and record session start
     clear_terminal()
-    write_file(SESSION_LOG)
+    append_session_banner("BATCH CLI START (main.py)")
 
-    # Build a retry-aware queue from URLs.txt and retry.txt.
-    input_urls = [url.strip() for url in read_file(URLS_FILE) if url.strip()]
-    urls = build_download_queue(input_urls)
+    # Read and process URLs, ignoring empty lines
+    # URLs.txt is optional: create it empty on first run
+    if not Path(URLS_FILE).exists():
+        write_file(URLS_FILE)
+    # One URL per line; blank lines and lines starting with '#' are ignored
+    urls = [url.strip() for url in read_file(URLS_FILE) if url.strip() and not url.strip().startswith("#")]
+    retry_urls = load_failed_urls()
+    urls_to_process = merge_urls(urls, retry_urls)
 
-    if urls:
-        process_urls(urls)
+    failed_urls = await process_urls(urls_to_process)
+    save_failed_urls(failed_urls)
 
-    # URLs.txt is cleared so completed items are not re-queued on the next run.
+    # Clear URLs file
     write_file(URLS_FILE)
+    append_session_banner(f"BATCH CLI END (main.py) - Failed: {len(failed_urls)}")
 
 
 if __name__ == "__main__":
     try:
-        main()
+        asyncio.run(main())
 
     except KeyboardInterrupt:
         sys.exit(1)

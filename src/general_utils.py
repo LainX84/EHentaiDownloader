@@ -11,30 +11,45 @@ import os
 import random
 import time
 from pathlib import Path
-from urllib.parse import urlparse, urlunparse
 
 import requests
 from bs4 import BeautifulSoup
 
-from src.config import prepare_user_agent
+from src.config import (
+    CONNECTION_TIMEOUT,
+    PAGE_FETCH_RETRIES,
+    RATE_LIMIT_SLEEPING_TIME,
+    prepare_user_agent,
+)
 
 # Cache cookies to avoid repeated disk reads
 _cached_cookies = None
 
 
 def _compact_text(value: str, limit: int = 240) -> str:
-    """Normalize whitespace and shorten diagnostic text."""
-    compacted = " ".join(value.split())
+    """Normalize whitespace and shorten diagnostic text, removing unprintable characters."""
+    cleaned = "".join(ch if ch.isprintable() or ch in " \t\n" else " " for ch in value)
+    compacted = " ".join(cleaned.split())
     return compacted[:limit] if len(compacted) <= limit else f"{compacted[:limit]}..."
 
 
-def _extract_page_details(html: str) -> tuple[str, str]:
-    """Extract page title and body text for diagnostics."""
-    soup = BeautifulSoup(html, "html.parser")
+def _extract_page_details(html: str, soup: BeautifulSoup | None = None) -> tuple[str, str, bool]:
+    """Extract page title, diagnostic body text, and whether the page has valid gallery/reader content."""
+    if not html or not html.strip():
+        return "", "", False
+    if soup is None:
+        soup = BeautifulSoup(html, "html.parser")
     title_tag = soup.find("title")
     page_title = title_tag.get_text(strip=True) if title_tag else ""
+
+    # Check for structural markers indicating a valid gallery, reader, or index page
+    has_valid_content = bool(
+        soup.find(id=["gdt", "gd1", "gd2", "gdd", "gn", "gj", "i1", "img", "loadfail"])
+        or soup.find(class_=["itg", "gl1t", "itc"])
+    )
+
     body_text = soup.body.get_text(" ", strip=True) if soup.body else ""
-    return page_title, body_text
+    return page_title, body_text, has_valid_content
 
 
 def _classify_page_problem(
@@ -42,9 +57,38 @@ def _classify_page_problem(
     status_code: int,
     html: str,
     has_cookies: bool,
+    response_headers: dict | None = None,
+    soup: BeautifulSoup | None = None,
 ) -> str | None:
     """Return a precise human-readable diagnosis when a page indicates access issues."""
-    page_title, body_text = _extract_page_details(html)
+    lowered_url = url.lower()
+
+    # Check for empty response (specifically on ExHentai or general)
+    if not html.strip():
+        if "exhentai" in lowered_url:
+            return (
+                "Reason: ExHentai access unauthorized or rejected. "
+                "The server replied with 0 bytes (typical when the 'igneous', "
+                "'ipb_member_id' or 'ipb_pass_hash' cookies are expired, wrong or missing). "
+                f"HTTP {status_code}."
+            )
+        return f"Reason: empty response from the server for {url}. HTTP {status_code}."
+
+    # Check for cookie rejection in response headers (e.g. Set-Cookie: igneous=mystery)
+    if response_headers:
+        cookie_header = response_headers.get("Set-Cookie", "") or response_headers.get("set-cookie", "")
+        if "mystery" in cookie_header.lower():
+            return (
+                "Reason: ExHentai cookies rejected by the server (received 'igneous=mystery'). "
+                "Your cookies in cookies.json / cookies.txt are expired or invalid."
+            )
+
+    page_title, body_text, has_valid_content = _extract_page_details(html, soup=soup)
+
+    # If HTTP 200 and page has valid gallery, reader, or index structures, it is a valid page
+    if status_code == 200 and has_valid_content:
+        return None
+
     lowered_title = page_title.lower()
     lowered_body = body_text.lower()
     lowered_html = html.lower()
@@ -53,57 +97,64 @@ def _classify_page_problem(
 
     if "temporarily banned" in lowered_body or "ip address has been" in lowered_body:
         return (
-            "Motivo: IP limitato o temporaneamente bannato da E-Hentai. "
-            f"HTTP {status_code}. Titolo pagina: {page_title or 'N/A'}. Snippet: {snippet}"
+            "Reason: IP restricted or temporarily banned by E-Hentai. "
+            f"HTTP {status_code}. Page title: {page_title or 'N/A'}. Snippet: {snippet}"
         )
 
     if status_code in (429, 509) or "bandwidth exceeded" in lowered_body or "rate limit" in lowered_body:
         return (
-            "Motivo: rate limit del sito raggiunto. "
-            f"HTTP {status_code}. Titolo pagina: {page_title or 'N/A'}. Snippet: {snippet}"
+            "Reason: site rate limit reached. "
+            f"HTTP {status_code}. Page title: {page_title or 'N/A'}. Snippet: {snippet}"
         )
 
-    if "sad panda" in lowered_title or "exhentai" in url.lower() and ("sad panda" in lowered_body or "sad panda" in lowered_html):
+    if "sad panda" in lowered_title or (
+        "exhentai" in lowered_url and ("sad panda" in lowered_body or "sad panda" in lowered_html)
+    ):
         return (
-            "Motivo: accesso ExHentai negato; cookie mancanti, scaduti o non validi. "
-            f"HTTP {status_code}. Titolo pagina: {page_title or 'N/A'}. Snippet: {snippet}"
+            "Reason: ExHentai access denied; cookies missing, expired or invalid. "
+            f"HTTP {status_code}. Page title: {page_title or 'N/A'}. Snippet: {snippet}"
         )
 
     if "login" in lowered_title or "please log in" in lowered_body or "you must be logged in" in lowered_body:
         return (
-            "Motivo: autenticazione richiesta; cookie mancanti o scaduti. "
-            f"HTTP {status_code}. Titolo pagina: {page_title or 'N/A'}. Snippet: {snippet}"
+            "Reason: authentication required; cookies missing or expired. "
+            f"HTTP {status_code}. Page title: {page_title or 'N/A'}. Snippet: {snippet}"
         )
 
     if "captcha" in lowered_body or "automated queries" in lowered_body or "check your browser" in lowered_body:
         return (
-            "Motivo: protezione anti-bot o challenge del sito. "
-            f"HTTP {status_code}. Titolo pagina: {page_title or 'N/A'}. Snippet: {snippet}"
+            "Reason: anti-bot protection or site challenge. "
+            f"HTTP {status_code}. Page title: {page_title or 'N/A'}. Snippet: {snippet}"
         )
 
     if status_code == 404:
+        if "gallery has been removed or is unavailable" in lowered_body or "gallery not available" in lowered_title:
+            return (
+                "Reason: gallery unavailable or removed from E-Hentai (it may be ExHentai-only and need valid cookies). "
+                f"HTTP {status_code}. Page title: {page_title or 'N/A'}. Snippet: {snippet}"
+            )
         return (
-            "Motivo: URL non valido, scaduto o contenuto rimosso. "
-            f"HTTP {status_code}. Titolo pagina: {page_title or 'N/A'}. Snippet: {snippet}"
+            "Reason: invalid or expired URL, or content removed. "
+            f"HTTP {status_code}. Page title: {page_title or 'N/A'}. Snippet: {snippet}"
         )
 
     if status_code == 403:
-        reason = "cookie scaduti/non validi oppure accesso/IP limitato" if has_cookies else "cookie mancanti oppure accesso negato dal sito"
+        reason = "cookies expired/invalid or access/IP restricted" if has_cookies else "cookies missing or access denied by the site"
         return (
-            f"Motivo: {reason}. "
-            f"HTTP {status_code}. Titolo pagina: {page_title or 'N/A'}. Snippet: {snippet}"
+            f"Reason: {reason}. "
+            f"HTTP {status_code}. Page title: {page_title or 'N/A'}. Snippet: {snippet}"
         )
 
     if status_code >= 400:
         return (
-            "Motivo: errore HTTP restituito dal sito. "
-            f"HTTP {status_code}. Titolo pagina: {page_title or 'N/A'}. Snippet: {snippet}"
+            "Reason: HTTP error returned by the site. "
+            f"HTTP {status_code}. Page title: {page_title or 'N/A'}. Snippet: {snippet}"
         )
 
     if "e-hentai galleries" == lowered_title and "forums" not in lowered_body and "gallery" not in lowered_body and "thumbnail" not in lowered_body:
         return (
-            "Motivo: pagina anomala o incompleta restituita dal sito. "
-            f"HTTP {status_code}. Titolo pagina: {page_title or 'N/A'}. Snippet: {snippet}"
+            "Reason: unexpected or incomplete page returned by the site. "
+            f"HTTP {status_code}. Page title: {page_title or 'N/A'}. Snippet: {snippet}"
         )
 
     return None
@@ -122,12 +173,13 @@ def _build_request_error_message(
             status_code=response.status_code,
             html=response.text,
             has_cookies=has_cookies,
+            response_headers=getattr(response, "headers", None),
         )
         if diagnosis:
-            return f"Error fetching page {url}: {diagnosis}"
-        return f"Error fetching page {url}: HTTP {response.status_code}: {error}"
+            return diagnosis
+        return f"HTTP {response.status_code}: {error}"
 
-    return f"Error fetching page {url}: network/request error: {error}"
+    return f"network/request error: {error}"
 
 
 def load_cookies() -> dict[str, str]:
@@ -189,7 +241,7 @@ def create_session() -> requests.Session:
         "User-Agent": prepare_user_agent(),
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
         "Accept-Language": "en-US,en;q=0.5",
-        "Accept-Encoding": "gzip, deflate, br, zstd",
+        "Accept-Encoding": "gzip, deflate",
         "Connection": "keep-alive",
     })
 
@@ -200,155 +252,127 @@ def create_session() -> requests.Session:
     return session
 
 
-def _get_alternate_domain_url(url: str) -> str | None:
-    """Return a URL with the alternate gallery domain if supported."""
-    parsed = urlparse(url)
-    host = parsed.netloc.lower()
-
-    if "e-hentai.org" in host:
-        alternate_host = parsed.netloc.replace("e-hentai.org", "exhentai.org")
-    elif "exhentai.org" in host:
-        alternate_host = parsed.netloc.replace("exhentai.org", "e-hentai.org")
-    else:
-        return None
-
-    return urlunparse(parsed._replace(netloc=alternate_host))
+def get_alternate_domain_url(url: str) -> str | None:
+    """Return equivalent URL on alternate domain (e-hentai.org <-> exhentai.org)."""
+    if "e-hentai.org" in url:
+        return url.replace("e-hentai.org", "exhentai.org")
+    if "exhentai.org" in url:
+        return url.replace("exhentai.org", "e-hentai.org")
+    return None
 
 
-def _adapt_referer_to_target_domain(referer: str | None, target_url: str) -> str | None:
-    """Align referer domain with target URL domain to reduce cross-domain blocking."""
-    if not referer:
-        return None
-
-    target_host = urlparse(target_url).netloc
-    if not target_host:
-        return referer
-
-    parsed_referer = urlparse(referer)
-    if not parsed_referer.netloc:
-        return referer
-
-    if parsed_referer.netloc == target_host:
-        return referer
-
-    return urlunparse(parsed_referer._replace(netloc=target_host))
+_TRANSIENT_STATUS = {429, 500, 502, 503, 504, 509}
 
 
 def fetch_page(
     url: str,
-    timeout: int = 10,
+    timeout: int = CONNECTION_TIMEOUT,
     session: requests.Session | None = None,
     referer: str | None = None,
+    retries: int = PAGE_FETCH_RETRIES,
 ) -> BeautifulSoup:
-    """Fetch the HTML content of a webpage with cookies and browser headers."""
+    """Fetch the HTML content of a webpage with cookies and browser headers.
+
+    If primary domain fails or returns an error page (e.g. 404, rate limit, restricted access),
+    attempts fallback to equivalent URL on alternate domain (e-hentai.org <-> exhentai.org).
+    Transient problems (network errors, timeouts, 429/5xx) are retried with backoff;
+    permanent ones (404, ban, missing cookies) fail immediately.
+    """
     request_session = session or create_session()
     has_cookies = bool(request_session.cookies)
 
-    def _request_page(target_url: str, target_referer: str | None) -> tuple[requests.Response, str]:
-        headers = {"Referer": target_referer} if target_referer else None
-        response = request_session.get(target_url, timeout=timeout, headers=headers)
-        response.raise_for_status()
+    urls_to_try = [url]
+    alt_url = get_alternate_domain_url(url)
+    if alt_url and alt_url != url:
+        urls_to_try.append(alt_url)
 
-        if not response.text.strip():
-            return response, "empty"
+    last_exception: Exception | None = None
+    last_diagnosis: str | None = None
 
-        diagnosis = _classify_page_problem(
-            url=target_url,
-            status_code=response.status_code,
-            html=response.text,
-            has_cookies=has_cookies,
-        )
-        if diagnosis:
-            return response, diagnosis
+    for attempt in range(max(1, retries)):
+        transient = False
+        rate_limited = False
 
-        return response, "ok"
+        for attempt_idx, current_url in enumerate(urls_to_try):
+            current_referer = referer
+            if current_referer and attempt_idx > 0 and alt_url:
+                alt_ref = get_alternate_domain_url(current_referer)
+                if alt_ref:
+                    current_referer = alt_ref
 
-    try:
-        primary_referer = _adapt_referer_to_target_domain(referer, url)
-        response, primary_state = _request_page(url, primary_referer)
-        fetched_url = url
+            headers = {"Referer": current_referer} if current_referer else None
 
-        # Try domain fallback in both directions when the primary response is unusable.
-        if primary_state != "ok":
-            fallback_url = _get_alternate_domain_url(url)
-            if fallback_url:
-                fallback_referer = _adapt_referer_to_target_domain(referer, fallback_url)
-                logging.warning(
-                    "Primary response unusable for %s (%s). Trying fallback: %s",
-                    url,
-                    primary_state,
-                    fallback_url,
-                )
-                fallback_response, fallback_state = _request_page(fallback_url, fallback_referer)
-                if fallback_state == "ok":
-                    response = fallback_response
-                    fetched_url = fallback_url
-                else:
-                    raise RuntimeError(
-                        f"Error fetching page {url}: primary={primary_state}; "
-                        f"fallback={fallback_state}"
-                    )
-            else:
-                raise RuntimeError(f"Error fetching page {url}: {primary_state}")
-
-        soup = BeautifulSoup(response.text, "html.parser")
-        soup.fetched_url = fetched_url
-        return soup
-
-    except requests.RequestException as req_err:
-        response = req_err.response if hasattr(req_err, "response") else None
-        fallback_url = _get_alternate_domain_url(url)
-        if fallback_url:
             try:
-                fallback_referer = _adapt_referer_to_target_domain(referer, fallback_url)
-                fallback_response, fallback_state = _request_page(fallback_url, fallback_referer)
-                if fallback_state == "ok":
-                    soup = BeautifulSoup(fallback_response.text, "html.parser")
-                    soup.fetched_url = fallback_url
-                    logging.warning(
-                        "Primary request failed for %s (%s). Recovered via fallback %s",
-                        url,
-                        req_err,
-                        fallback_url,
-                    )
+                response = request_session.get(current_url, timeout=timeout, headers=headers)
+
+                soup = BeautifulSoup(response.text, "html.parser") if response.text.strip() else None
+
+                diagnosis = _classify_page_problem(
+                    url=current_url,
+                    status_code=response.status_code,
+                    html=response.text,
+                    has_cookies=has_cookies,
+                    response_headers=response.headers,
+                    soup=soup,
+                )
+
+                if response.status_code == 200 and not diagnosis and soup:
+                    if attempt_idx > 0:
+                        logging.info(f"Fallback to alternate domain succeeded: {current_url}")
+                    soup.fetched_url = current_url
                     return soup
 
-                message = (
-                    f"Error fetching page {url}: primary request failed ({req_err}); "
-                    f"fallback unusable ({fallback_state})"
-                )
-                logging.exception(message)
-                raise RuntimeError(message) from req_err
-            except requests.RequestException as fallback_err:
-                primary_message = _build_request_error_message(
-                    url=url,
+                if response.status_code in _TRANSIENT_STATUS:
+                    # Only the primary domain decides: the alternate one often just lacks cookies
+                    if attempt_idx == 0:
+                        transient = True
+                        rate_limited = response.status_code in (429, 509)
+
+                if not diagnosis and not response.text.strip():
+                    if "exhentai" in current_url.lower():
+                        diagnosis = (
+                            f"Reason: ExHentai access rejected for {current_url} "
+                            "(empty server response; 'igneous', 'ipb_member_id' or 'ipb_pass_hash' cookies missing or invalid)."
+                        )
+                    else:
+                        diagnosis = f"Reason: empty response from the server for {current_url}."
+
+                last_diagnosis = diagnosis or f"HTTP {response.status_code}"
+                if attempt_idx < len(urls_to_try) - 1:
+                    logging.warning(
+                        f"Fetch failed for {current_url} ({last_diagnosis}). Trying alternate domain: {urls_to_try[attempt_idx + 1]}"
+                    )
+
+            except requests.RequestException as req_err:
+                response = req_err.response if hasattr(req_err, "response") else None
+                last_diagnosis = _build_request_error_message(
+                    url=current_url,
                     response=response,
                     error=req_err,
                     has_cookies=has_cookies,
                 )
-                fallback_response = (
-                    fallback_err.response
-                    if hasattr(fallback_err, "response")
-                    else None
-                )
-                fallback_message = _build_request_error_message(
-                    url=fallback_url,
-                    response=fallback_response,
-                    error=fallback_err,
-                    has_cookies=has_cookies,
-                )
-                message = f"{primary_message}. Fallback failed too: {fallback_message}"
-                logging.exception(message)
-                raise RuntimeError(message) from req_err
+                last_exception = req_err
+                if attempt_idx == 0:
+                    transient = True
+                if attempt_idx < len(urls_to_try) - 1:
+                    logging.warning(
+                        f"Request error for {current_url} ({req_err}). Trying alternate domain: {urls_to_try[attempt_idx + 1]}"
+                    )
 
-        message = _build_request_error_message(
-            url=url,
-            response=response,
-            error=req_err,
-            has_cookies=has_cookies,
+        if not transient or attempt >= retries - 1:
+            break
+
+        delay = RATE_LIMIT_SLEEPING_TIME if rate_limited else 2 ** (attempt + 1) + random.uniform(0.5, 1.5)  # noqa: S311
+        logging.warning(
+            f"Temporary error on {url} ({last_diagnosis}). Retry {attempt + 2}/{retries} in {delay:.0f}s..."
         )
-        logging.exception(message)
-        raise RuntimeError(message) from req_err
+        time.sleep(delay)
+
+    message = f"Error fetching page {url}: {last_diagnosis}"
+    logging.error(message)
+    if last_exception:
+        raise RuntimeError(message) from last_exception
+    raise RuntimeError(message)
 
 
 def clear_terminal() -> None:

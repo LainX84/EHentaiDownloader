@@ -12,6 +12,8 @@ import threading
 import time
 from typing import TYPE_CHECKING
 
+from src.file_utils import append_session_log
+
 from rich.console import Group
 from rich.live import Live
 
@@ -68,6 +70,7 @@ class LiveManager:
         with self._lock:
             self.logger.log(event, details)
             self.live.update(self._render_live_view())
+            append_session_log(event, details)
 
     def start(self) -> None:
         """Start the live display."""
