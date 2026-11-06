@@ -13,21 +13,16 @@ import subprocess
 import threading
 import time
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import urlparse
 
-import requests
 from requests import Response, Session
 
-from concurrent.futures import ThreadPoolExecutor, as_completed
-
 from src.config import (
-    CHUNK_SIZE,
     DOWNLOAD_FOLDER,
-    HTTP_RATE_LIMIT,
     IMAGE_FETCH_RETRIES,
     IMAGE_SERVER_RETRIES,
     MAX_WORKERS,
-    RATE_LIMIT_SLEEPING_TIME,
     RENAME_SEQUENTIAL,
     TEMP_FOLDER,
 )
@@ -181,7 +176,7 @@ class AlbumDownloader:
                 startupinfo.wShowWindow = 0
                 kwargs["startupinfo"] = startupinfo
 
-            result = subprocess.run(cmd, input=content, capture_output=True, timeout=30, **kwargs)
+            result = subprocess.run(cmd, input=content, capture_output=True, timeout=30, check=False, **kwargs)
             return result.returncode == 0 and target_path.exists() and target_path.stat().st_size > 0
         except Exception:
             return False
@@ -261,9 +256,8 @@ class AlbumDownloader:
                     f"Preserved original animation for {target_path.name}",
                 )
                 return
-            else:
-                ext = "jpg"
-                target_path = Path(self.download_path) / f"{stem}.jpg"
+            ext = "jpg"
+            target_path = Path(self.download_path) / f"{stem}.jpg"
         elif self.image_format in ("original", "native", ""):
             target_path = Path(self.download_path) / f"{stem}{actual_ext}"
             target_path.parent.mkdir(parents=True, exist_ok=True)

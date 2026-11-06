@@ -1,0 +1,29 @@
+# Pylint settings used by the GitHub Actions workflow (.github/workflows/pylint.yml)
+
+[MAIN]
+py-version = 3.10
+
+[FORMAT]
+# Long log/error messages are easier to read on one line
+max-line-length = 140
+
+[MESSAGES CONTROL]
+disable =
+    broad-exception-caught,
+    # Pillow and json are imported lazily on purpose (optional / rarely used)
+    import-outside-toplevel,
+    # f-strings in logging calls are kept for readability
+    logging-fstring-interpolation,
+    # Module-level cookie cache in general_utils
+    global-statement,
+    invalid-name,
+    # Shared "if __name__ == '__main__'" block in main.py and retry.py
+    duplicate-code,
+    # Design/complexity checks (download and GUI logic is intentionally long)
+    too-many-instance-attributes,
+    too-many-arguments,
+    too-many-positional-arguments,
+    too-many-locals,
+    too-many-branches,
+    too-many-statements,
+    too-many-return-statements

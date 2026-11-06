@@ -257,7 +257,7 @@ def load_cookies() -> dict[str, str]:
                             continue
                         parts = line.split("\t")
                         if len(parts) >= 7:
-                            domain, flag, path, secure, expiration, name, value = parts[:7]
+                            domain, _flag, _path, _secure, _expiration, name, value = parts[:7]
                             if "exhentai.org" in domain or "e-hentai.org" in domain:
                                 cookies[name] = value
                 else:

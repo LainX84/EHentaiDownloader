@@ -12,10 +12,10 @@ import threading
 import time
 from typing import TYPE_CHECKING
 
-from src.file_utils import append_session_log
-
 from rich.console import Group
 from rich.live import Live
+
+from src.file_utils import append_session_log
 
 if TYPE_CHECKING:
     from .log_manager import LoggerTable

@@ -8,7 +8,6 @@ import datetime
 import logging
 import os
 import re
-import sys
 import threading
 from pathlib import Path
 

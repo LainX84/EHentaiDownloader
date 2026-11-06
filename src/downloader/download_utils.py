@@ -70,7 +70,7 @@ def _fetch_with_retries_single(
                     if hasattr(live_manager, "update_page_stream"):
                         live_manager.update_page_stream(page_idx, downloaded, total_bytes)
 
-            response._content = b"".join(chunks)
+            response._content = b"".join(chunks)  # pylint: disable=protected-access
             if hasattr(live_manager, "finish_page_stream"):
                 live_manager.finish_page_stream(page_idx)
             return response
@@ -88,20 +88,19 @@ def _fetch_with_retries_single(
                 )
                 time.sleep(RATE_LIMIT_SLEEPING_TIME)
                 continue
-            else:
-                live_manager.update_log(
-                    "HTTP error",
-                    f"HTTP error {status_code} for page {page_idx}: {http_err}",
-                )
-                break
+            live_manager.update_log(
+                "HTTP error",
+                f"HTTP error {status_code} for page {page_idx}: {http_err}",
+            )
+            break
 
-        except ConnectTimeout as conn_timeout:
+        except ConnectTimeout:
             live_manager.update_log(
                 "Timeout",
                 f"Connection timeout for page {page_idx}. Attempt {attempt + 1}/{retries}...",
             )
 
-        except Timeout as timeout_err:
+        except Timeout:
             live_manager.update_log(
                 "Timeout",
                 f"Request timeout for page {page_idx}. Attempt {attempt + 1}/{retries}...",

@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import asyncio
 import sys
-from pathlib import Path
 from urllib.parse import urlparse
 
 from downloader import download_album, initialize_managers, load_failed_urls, save_failed_urls
