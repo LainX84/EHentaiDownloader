@@ -114,10 +114,10 @@ def sanitize_directory_name(directory_name: str, max_length: int = 150) -> str:
     return sanitized
 
 
-def create_download_directory(directory_name: str) -> str:
-    """Create a directory for downloads if it doesn't exist."""
+def create_download_directory(directory_name: str, base_folder: str = DOWNLOAD_FOLDER) -> str:
+    """Create a directory for downloads (inside base_folder) if it doesn't exist."""
     clean_name = sanitize_directory_name(directory_name)
-    download_path = Path(DOWNLOAD_FOLDER) / clean_name
+    download_path = Path(base_folder) / clean_name
 
     try:
         download_path.mkdir(parents=True, exist_ok=True)

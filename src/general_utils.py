@@ -9,8 +9,10 @@ terminal, making it reusable across projects.
 import logging
 import os
 import random
+import re
 import time
 from pathlib import Path
+from urllib.parse import urlparse
 
 import requests
 from bs4 import BeautifulSoup
@@ -24,6 +26,33 @@ from src.config import (
 
 # Cache cookies to avoid repeated disk reads
 _cached_cookies = None
+
+
+GALLERY_URL_RE = re.compile(r"^https?://(?:e-hentai|exhentai)\.org/g/(\d+)/([^/?#]+)", re.IGNORECASE)
+GALLERY_TOKEN_RE = re.compile(r"^[0-9a-f]{10}$")
+
+
+def validate_gallery_url(url: str) -> str | None:
+    """Return an error message if the URL is not a well-formed gallery link, else None.
+
+    A gallery link looks like https://e-hentai.org/g/<gallery id>/<token>/ where the
+    token is always 10 hexadecimal characters. A shorter/longer token usually means the
+    link was copied incompletely, and the site answers "Key missing, or incorrect key provided."
+    """
+    match = GALLERY_URL_RE.match(url.strip())
+    if not match:
+        return (
+            f"Invalid gallery URL: {url}. Expected https://e-hentai.org/g/<number>/<token>/ "
+            "(or the same on exhentai.org)."
+        )
+    token = match.group(2)
+    if not GALLERY_TOKEN_RE.match(token):
+        return (
+            f"Invalid gallery URL: the token '{token}' has {len(token)} characters, but gallery "
+            "tokens are always 10 hexadecimal characters. The link was probably copied "
+            "incompletely: copy it again from the browser."
+        )
+    return None
 
 
 def _compact_text(value: str, limit: int = 240) -> str:
@@ -95,6 +124,19 @@ def _classify_page_problem(
     snippet_source = body_text or html
     snippet = _compact_text(snippet_source) if snippet_source else "Empty response"
 
+    if "key missing" in lowered_html or "incorrect key provided" in lowered_html:
+        return (
+            "Reason: wrong or incomplete link (the site says 'Key missing, or incorrect key provided'). "
+            "Copy the gallery URL again from the browser. "
+            f"HTTP {status_code}."
+        )
+
+    if "content warning" in lowered_html and "never warn me again" in lowered_html:
+        return (
+            "Reason: the site showed its 'Content Warning' page instead of the gallery. "
+            f"HTTP {status_code}."
+        )
+
     if "temporarily banned" in lowered_body or "ip address has been" in lowered_body:
         return (
             "Reason: IP restricted or temporarily banned by E-Hentai. "
@@ -151,13 +193,12 @@ def _classify_page_problem(
             f"HTTP {status_code}. Page title: {page_title or 'N/A'}. Snippet: {snippet}"
         )
 
-    if "e-hentai galleries" == lowered_title and "forums" not in lowered_body and "gallery" not in lowered_body and "thumbnail" not in lowered_body:
-        return (
-            "Reason: unexpected or incomplete page returned by the site. "
-            f"HTTP {status_code}. Page title: {page_title or 'N/A'}. Snippet: {snippet}"
-        )
-
-    return None
+    # Any other page without gallery / image-viewer content is not what we asked for:
+    # never treat it as a success (it would only fail later with a confusing error).
+    return (
+        "Reason: unexpected page returned by the site (no gallery content found). "
+        f"HTTP {status_code}. Page title: {page_title or 'N/A'}. Snippet: {snippet}"
+    )
 
 
 def _build_request_error_message(
@@ -245,6 +286,11 @@ def create_session() -> requests.Session:
         "Connection": "keep-alive",
     })
 
+    # "nw=1" is the cookie the site sets when you click "Never Warn Me Again":
+    # it skips the "Content Warning" page shown before some galleries.
+    for domain in (".e-hentai.org", ".exhentai.org"):
+        session.cookies.set("nw", "1", domain=domain)
+
     cookies = load_cookies()
     if cookies:
         session.cookies.update(cookies)
@@ -288,6 +334,8 @@ def fetch_page(
 
     last_exception: Exception | None = None
     last_diagnosis: str | None = None
+    # What each domain answered on the last attempt, shown together in the final error
+    diagnoses_by_domain: dict[str, str] = {}
 
     for attempt in range(max(1, retries)):
         transient = False
@@ -338,6 +386,7 @@ def fetch_page(
                         diagnosis = f"Reason: empty response from the server for {current_url}."
 
                 last_diagnosis = diagnosis or f"HTTP {response.status_code}"
+                diagnoses_by_domain[urlparse(current_url).netloc] = last_diagnosis
                 if attempt_idx < len(urls_to_try) - 1:
                     logging.warning(
                         f"Fetch failed for {current_url} ({last_diagnosis}). Trying alternate domain: {urls_to_try[attempt_idx + 1]}"
@@ -352,6 +401,7 @@ def fetch_page(
                     has_cookies=has_cookies,
                 )
                 last_exception = req_err
+                diagnoses_by_domain[urlparse(current_url).netloc] = last_diagnosis
                 if attempt_idx == 0:
                     transient = True
                 if attempt_idx < len(urls_to_try) - 1:
@@ -368,7 +418,11 @@ def fetch_page(
         )
         time.sleep(delay)
 
-    message = f"Error fetching page {url}: {last_diagnosis}"
+    if len(diagnoses_by_domain) > 1:
+        details = " | ".join(f"{domain} → {diag}" for domain, diag in diagnoses_by_domain.items())
+    else:
+        details = last_diagnosis
+    message = f"Error fetching page {url}: {details}"
     logging.error(message)
     if last_exception:
         raise RuntimeError(message) from last_exception

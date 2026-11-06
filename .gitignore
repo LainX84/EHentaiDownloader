@@ -192,3 +192,14 @@ cython_debug/
 #  refer to https://docs.cursor.com/context/ignore-files
 .cursorignore
 .cursorindexingignore
+# ---------------------------------------------------------------
+# EHentaiDownloader: personal data and runtime files (never commit)
+# ---------------------------------------------------------------
+cookies.json
+cookies.txt
+URLs.txt
+failed_downloads.txt
+session.log
+session.log.*
+Downloads/
+temp/

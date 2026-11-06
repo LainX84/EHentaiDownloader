@@ -8,6 +8,7 @@ change them and restart the program to apply.
 # Paths and Files
 # ============================
 DOWNLOAD_FOLDER = "Downloads"  # The folder where downloaded files will be stored.
+TEMP_FOLDER = "temp"            # Albums are downloaded here and moved to DOWNLOAD_FOLDER when complete.
 URLS_FILE = "URLs.txt"         # The file containing the list of URLs to process.
 SESSION_LOG = "session.log"    # The file where session logs will be recorded.
 FAILED_URLS_FILE = "failed_downloads.txt"  # Albums to retry in next runs.
@@ -24,6 +25,12 @@ IMAGE_SERVER_RETRIES = 3  # How many different image servers to try per page ("r
 IMAGE_FETCH_RETRIES = 3   # Attempts on the same image server before switching to another one.
 PAGE_FETCH_RETRIES = 3    # Attempts for gallery / picture HTML pages on transient errors.
 ALBUM_PAGE_DELAY = (0.5, 1.5)  # Random pause (seconds) between gallery index pages.
+
+# ============================
+# Batch list (GUI)
+# ============================
+AUTOSAVE_INTERVAL = 10       # Seconds between automatic saves of the batch list to URLs.txt.
+DONE_LINE_REMOVE_DELAY = 45  # Seconds a downloaded (green) line stays in the batch list.
 
 # ============================
 # HTTP / Network

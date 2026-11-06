@@ -29,6 +29,7 @@ from src.config import (
     MAX_WORKERS,
     RATE_LIMIT_SLEEPING_TIME,
     RENAME_SEQUENTIAL,
+    TEMP_FOLDER,
 )
 from src.crawler.crawler import Crawler
 from src.crawler.crawler_utils import extract_nl_value, get_picture_pages
@@ -37,7 +38,7 @@ from src.file_utils import (
     sanitize_directory_name,
     write_on_session_log,
 )
-from src.general_utils import create_session, fetch_page
+from src.general_utils import create_session, fetch_page, validate_gallery_url
 from src.managers.live_manager import LiveManager
 
 from .download_utils import fetch_with_retries, prepare_headers
@@ -67,6 +68,10 @@ class AlbumDownloader:
     ) -> None:
         """Initialize the AlbumDownloader with album URL, live manager, and optional format."""
         self.rename_sequential = RENAME_SEQUENTIAL if rename_sequential is None else bool(rename_sequential)
+        # Fail fast with a clear message on malformed links (e.g. a truncated token)
+        url_error = validate_gallery_url(url)
+        if url_error:
+            raise ValueError(url_error)
         parsed = urlparse(url)
         path = parsed.path if parsed.path.endswith("/") else f"{parsed.path}/"
         self.url = f"{parsed.scheme}://{parsed.netloc}{path}"
@@ -90,15 +95,33 @@ class AlbumDownloader:
         self.album_name = self.crawler.get_album_name()
         self.clean_album_name = self.crawler.get_clean_album_name()
         self.total_images = self.crawler.get_total_images()
+
+        # Tell the user which gallery this is and which site it is really downloaded from
+        requested_domain = urlparse(url).netloc.lower()
+        used_domain = urlparse(self.url).netloc.lower()
+        fallback_note = (
+            f" ({requested_domain} did not answer correctly, using {used_domain})"
+            if used_domain != requested_domain else ""
+        )
+        self.live_manager.update_log(
+            "Source",
+            f"\"{self.clean_album_name}\" — {self.total_images} images — from {used_domain}{fallback_note}",
+        )
         self.index_width = max(2, len(str(self.total_images))) if self.total_images > 0 else 3
-        clean_dir = Path(DOWNLOAD_FOLDER) / sanitize_directory_name(self.clean_album_name)
-        raw_dir = Path(DOWNLOAD_FOLDER) / sanitize_directory_name(self.album_name)
-        if clean_dir.exists() and any(clean_dir.iterdir()):
-            self.download_path = str(clean_dir)
-        elif raw_dir.exists() and any(raw_dir.iterdir()):
-            self.download_path = str(raw_dir)
-        else:
-            self.download_path = create_download_directory(self.album_name)
+        # Albums are downloaded into TEMP_FOLDER and moved to DOWNLOAD_FOLDER only once complete.
+        # A partial download is resumed from wherever it already is: first the temp folder,
+        # then Downloads (albums started before the temp folder existed are finished in place).
+        self.download_path = ""
+        for base in (TEMP_FOLDER, DOWNLOAD_FOLDER):
+            for name in (self.clean_album_name, self.album_name):
+                candidate = Path(base) / sanitize_directory_name(name)
+                if candidate.is_dir() and any(candidate.iterdir()):
+                    self.download_path = str(candidate)
+                    break
+            if self.download_path:
+                break
+        if not self.download_path:
+            self.download_path = create_download_directory(self.album_name, base_folder=TEMP_FOLDER)
 
         self._processed_images_count = 0
         self._processed_images_lock = threading.Lock()
@@ -366,24 +389,30 @@ class AlbumDownloader:
                 )
 
         if not total_failed_downloads:
-            self._finalize_successful_download()
+            # Rename while still in the temp folder, then move the finished album to Downloads
             if self.rename_sequential:
                 self._rename_sequential()
+            self._finalize_successful_download()
             if hasattr(self.live_manager, "update_album_progress"):
                 self.live_manager.update_album_progress(self.total_images, self.total_images)
 
         return total_failed_downloads
 
     def _finalize_successful_download(self) -> None:
-        """Rename the album folder to the clean original title if download succeeded 100%."""
+        """Move the complete album to Downloads/<clean title> (out of the temp folder)."""
         try:
             current_path = Path(self.download_path)
             clean_name = sanitize_directory_name(self.clean_album_name)
             target_path = Path(DOWNLOAD_FOLDER) / clean_name
 
             if current_path.resolve() == target_path.resolve():
+                self.live_manager.update_log(
+                    "Completed",
+                    f"Album completed in folder: \"{clean_name}\"",
+                )
                 return
 
+            target_path.parent.mkdir(parents=True, exist_ok=True)
             if target_path.exists():
                 for item in current_path.iterdir():
                     dest = target_path / item.name
@@ -391,14 +420,14 @@ class AlbumDownloader:
                         dest.unlink()
                     shutil.move(str(item), str(dest))
                 shutil.rmtree(str(current_path), ignore_errors=True)
-                self.download_path = str(target_path)
             else:
-                current_path.rename(target_path)
-                self.download_path = str(target_path)
+                # shutil.move also works if temp and Downloads are on different drives
+                shutil.move(str(current_path), str(target_path))
+            self.download_path = str(target_path)
 
             self.live_manager.update_log(
                 "Completed",
-                f"Album completed in folder: \"{clean_name}\"",
+                f"Album completed and moved to: \"{target_path}\"",
             )
         except Exception as err:
             self.live_manager.update_log(

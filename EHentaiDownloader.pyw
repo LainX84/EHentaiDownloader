@@ -44,7 +44,7 @@ from tkinter import (
 import tkinter as tk
 import tkinter.ttk as ttk
 
-from src.config import RENAME_SEQUENTIAL, SESSION_LOG
+from src.config import AUTOSAVE_INTERVAL, DONE_LINE_REMOVE_DELAY, RENAME_SEQUENTIAL, SESSION_LOG
 from src.file_utils import append_session_banner, append_session_log
 
 # ---------------------------------------------------------------------------
@@ -344,10 +344,28 @@ class EHentaiGUI(tk.Tk):
         self._running = False  # True while a download is in progress
         self._closed = False
 
+        # Batch download with a live queue (links can be added while it runs).
+        # Every claimed editor line carries a "task_<id>" tag, so it can be found again even
+        # when lines above it are added or removed.
+        self._batch_lock = threading.Lock()
+        self._batch_queue: queue.Queue = queue.Queue()    # tasks waiting for the downloader
+        self._verify_queue: queue.Queue = queue.Queue()   # tasks waiting for the link check
+        self._batch_scan_done = threading.Event()
+        self._batch_stop = threading.Event()
+        self._batch_accepting = False   # GUI may still hand new lines to the running batch
+        self._batch_seq = 0             # last task id
+        self._batch_total = 0           # tasks claimed in the current batch
+        self._batch_keys: dict[str, bool] = {}   # gallery key -> claimed link is valid
+        self._task_state: dict[int, str] = {}    # id -> queued / active / done
+        self._verify_bad: set[int] = set()       # ids found BAD by the parallel link check
+        self._failed_task_ids: list[int] = []    # ids that failed (removed when the batch ends)
+        self._pending_removals: dict[int, str] = {}  # id -> after() handle of green lines
+
         self._setup_styles()
         self._build_ui()
         self._install_logging()
         self._poll_queue()
+        self.after(AUTOSAVE_INTERVAL * 1000, self._autosave_tick)
         self.bind("<Configure>", self._on_window_resize)
         self.protocol("WM_DELETE_WINDOW", self._on_window_close)
         atexit.register(self._on_exit)
@@ -594,7 +612,8 @@ class EHentaiGUI(tk.Tk):
                       row=0, column=0, columnspan=2,
                       padx=PAD, pady=(PAD, 4), sticky="w")
         ttk.Label(card,
-                  text="One URL per line. Changes are saved to URLs.txt before starting.",
+                  text="One URL per line (saved automatically). You can keep adding links at the "
+                       "bottom while the batch runs; downloaded lines disappear after a while.",
                   style="Sub.TLabel").grid(
                       row=1, column=0, columnspan=2,
                       padx=PAD, pady=(0, 6), sticky="w")
@@ -622,6 +641,10 @@ class EHentaiGUI(tk.Tk):
 
         self._load_urls_txt()
         self._batch_editor.tag_configure(
+            "queued_batch_line",
+            background="#F4F6F8",
+        )
+        self._batch_editor.tag_configure(
             "active_batch_line",
             background="#D6EAF8",
             foreground="#154360",
@@ -636,18 +659,29 @@ class EHentaiGUI(tk.Tk):
             background="#FADBD8",
             foreground="#78281F",
         )
+        # Later states must win over "queued" when both are on a line
+        for tag in ("active_batch_line", "done_batch_line", "fail_batch_line"):
+            self._batch_editor.tag_raise(tag, "queued_batch_line")
 
         # Buttons row
         btn_row = tk.Frame(card, bg=PANEL)
         btn_row.grid(row=3, column=0, columnspan=2,
                      padx=PAD, pady=(6, PAD), sticky="ew")
 
-        _btn(btn_row, "🔄  Reload", self._load_urls_txt,
-             style="Ghost.TButton").pack(side="left", padx=(0, 6))
+        self._reload_btn = _btn(btn_row, "🔄  Reload", self._load_urls_txt,
+                                style="Ghost.TButton")
+        self._reload_btn.pack(side="left", padx=(0, 6))
         _btn(btn_row, "💾  Save", self._save_urls_txt,
              style="Ghost.TButton").pack(side="left", padx=(0, 6))
-        _btn(btn_row, "🗑  Clear All", self._clear_urls_txt,
-             style="Ghost.TButton").pack(side="left")
+        self._clear_btn = _btn(btn_row, "🗑  Clear All", self._clear_urls_txt,
+                               style="Ghost.TButton")
+        self._clear_btn.pack(side="left", padx=(0, 6))
+        self._dedupe_btn = _btn(btn_row, "🧹  Duplicates", self._remove_duplicates,
+                                style="Ghost.TButton")
+        self._dedupe_btn.pack(side="left", padx=(0, 6))
+        self._verify_btn = _btn(btn_row, "🔍  Verify Links", self._start_verify,
+                                style="Ghost.TButton")
+        self._verify_btn.pack(side="left")
 
         self._batch_btn = _btn(btn_row, "▶  Start Batch", self._start_batch)
         self._batch_btn.pack(side="right")
@@ -905,7 +939,37 @@ class EHentaiGUI(tk.Tk):
                     self._batch_editor.tag_remove("active_batch_line", "1.0", END)
                     self._batch_editor.tag_add("active_batch_line", f"{line_no}.0", f"{line_no}.end")
                     self._batch_editor.see(f"{line_no}.0")
-                    self._status_var.set(f"[{cur_idx}/{total_cnt}] Downloading line {line_no}: {url}")
+                    self._status_var.set(f"[{cur_idx}/{total_cnt}] Line {line_no}: {url}")
+                elif msg_type == "BATCH_ANNOTATE":
+                    # Replace a batch line with "URL  # Gallery name"
+                    _, line_no, text = msg
+                    self._replace_editor_line(line_no, text)
+                elif msg_type == "RELOAD_LISTS":
+                    # Worker threads must not touch widgets: they ask the GUI thread to do it
+                    self._load_retry_list()
+                    self._load_urls_txt()
+                elif msg_type == "VERIFY_DONE":
+                    self._on_verify_done(*msg[1:])
+                elif msg_type == "BATCH_SCAN":
+                    self._scan_batch_editor()
+                    self._batch_scan_done.set()
+                elif msg_type == "TASK_ACTIVE":
+                    _, task_id, cur_idx, total_cnt, label = msg
+                    self._on_task_active(task_id, cur_idx, total_cnt, label)
+                elif msg_type == "TASK_ANNOTATE":
+                    _, task_id, text = msg
+                    line_no = self._task_line(task_id)
+                    if line_no:
+                        self._replace_editor_line(line_no, text)
+                elif msg_type == "TASK_DONE":
+                    _, task_id, is_ok = msg
+                    self._on_task_done(task_id, is_ok)
+                elif msg_type == "TASK_VERIFIED_BAD":
+                    line_no = self._task_line(msg[1])
+                    if line_no:
+                        self._batch_editor.tag_add("fail_batch_line", f"{line_no}.0", f"{line_no}.end")
+                elif msg_type == "BATCH_FINISHED":
+                    self._on_batch_finished()
                 elif msg_type == "BATCH_LINE_DONE":
                     _, line_no, is_ok = msg
                     self._batch_editor.tag_remove("active_batch_line", f"{line_no}.0", f"{line_no}.end")
@@ -937,6 +1001,11 @@ class EHentaiGUI(tk.Tk):
                     self._status_var.set(msg[1])
         except queue.Empty:
             pass
+        # While a batch runs, hand newly added lines to it (about twice a second)
+        if self._batch_accepting:
+            self._poll_ticks = getattr(self, "_poll_ticks", 0) + 1
+            if self._poll_ticks % 5 == 0:
+                self._scan_batch_editor()
         self.after(100, self._poll_queue)
 
     def _append_log(self, ts: str, event: str, details: str) -> None:
@@ -1025,7 +1094,17 @@ class EHentaiGUI(tk.Tk):
         else:
             failed_map = {}
 
-        total_failed_items = sum(len(items) if items else 1 for items in failed_map.values())
+        from downloader import gallery_name
+
+        def is_image_item(item: str) -> bool:
+            """True for a missing image (picture page URL or '(page NN)'), False for an album error."""
+            return "/s/" in item or "(page " in item
+
+        failed_albums = [url for url in failed_map if url]
+        missing_images = sum(
+            1 for items in failed_map.values() for item in (items or []) if is_image_item(item)
+        )
+        total_failed_items = len(failed_albums) or sum(len(items) or 1 for items in failed_map.values())
 
         if success and not failed_map:
             append_session_banner("DOWNLOAD COMPLETED SUCCESSFULLY — no missing files.")
@@ -1039,44 +1118,59 @@ class EHentaiGUI(tk.Tk):
             self._status_var.set("✔ Download completed successfully.")
         else:
             n = total_failed_items
-            append_session_banner(f"DOWNLOAD PARTIALLY FAILED — {n} items not downloaded")
-            num_links = len([k for k in failed_map.keys() if k])
-            suffix_links = f" (across {num_links} albums)" if num_links > 1 else ""
-            img_word = "image" if n == 1 else "images"
+            gal_word = "gallery" if n == 1 else "galleries"
+            img_part = f", {missing_images} image(s) missing" if missing_images else ""
+            append_session_banner(f"DOWNLOAD NOT COMPLETE — {n} {gal_word} with problems{img_part}")
 
             # ── Orange banner ─────────────────────────────────────────
             self._log_box.insert(END, f"\n[{ts}] {sep}\n", "warn_banner")
             self._log_box.insert(END,
-                f"[{ts}] ⚠  DOWNLOAD PARTIALLY FAILED — {n} {img_word} not downloaded{suffix_links}:\n",
+                f"[{ts}] ⚠  DOWNLOAD NOT COMPLETE — {n} {gal_word} with problems{img_part}:\n",
                 "warn_banner",
             )
             for album_url, items in failed_map.items():
                 if album_url:
-                    self._log_box.insert(END, f"[{ts}] 🔗 {album_url}\n", "warn_url")
-                if not items:
-                    self._log_box.insert(END, f"[{ts}]    • (Could not download the album or find any images)\n", "warn_item")
+                    # Gallery name first (when known), then its link
+                    title = gallery_name(album_url)
+                    label = f"{title}  —  {album_url}" if title else album_url
+                    self._log_box.insert(END, f"[{ts}] 🔗 {label}\n", "warn_url")
+                image_items = [item for item in (items or []) if is_image_item(item)]
+                if not image_items:
+                    self._log_box.insert(
+                        END,
+                        f"[{ts}]    • Gallery not downloaded: its page could not be read "
+                        "(the reason is in the log above)\n",
+                        "warn_item",
+                    )
                 else:
-                    for item in items:
+                    for item in image_items:
                         # Show only the last meaningful segment (filename or page URL)
-                        label = item.split("/")[-1] or item
-                        self._log_box.insert(END, f"[{ts}]    • {label}\n", "warn_item")
+                        label = item.split("/")[-1].strip() or item
+                        self._log_box.insert(END, f"[{ts}]    • missing image: {label}\n", "warn_item")
             self._log_box.insert(END, f"[{ts}] {sep}\n", "warn_banner")
             self._log_box.insert(END,
                 f"[{ts}] Use 'Retry Failed' to retry the missing files.\n",
                 "warn_banner",
             )
-            file_word = "missing file" if n == 1 else "missing files"
             self._status_var.set(
-                f"⚠ Partial download: {n} {file_word} — use Retry Failed."
+                f"⚠ Download not complete: {n} {gal_word} with problems{img_part} — use Retry Failed."
             )
 
         self._log_box.see(END)
         self._log_box.configure(state="disabled")
 
-    def _set_buttons_state(self, state: str) -> None:
-        """Enable or disable every control that must not change during a download."""
-        for btn in (self._single_btn, self._single_paste_btn, self._batch_btn, self._retry_btn):
+    def _set_buttons_state(self, state: str, editor_editable: bool = False) -> None:
+        """Enable or disable every control that must not change during a download.
+
+        editor_editable keeps the batch list editable (batch download: new links can be added).
+        """
+        for btn in (
+            self._single_btn, self._single_paste_btn, self._batch_btn, self._retry_btn,
+            self._verify_btn, self._dedupe_btn, self._reload_btn, self._clear_btn,
+        ):
             btn.configure(state=state)
+        # Verify / retry follow lines by number: the list must not change while they run
+        self._batch_editor.configure(state="normal" if editor_editable else state)
         self._format_cb.configure(state="readonly" if state == "normal" else "disabled")
         # The rename option is read when a download starts: lock it while one is running
         self._rename_btn.configure(state=state)
@@ -1124,6 +1218,12 @@ class EHentaiGUI(tk.Tk):
             append_session_banner("APPLICATION CLOSED (running download interrupted by the user)")
         else:
             append_session_banner("APPLICATION CLOSED")
+        # Keep the list on disk: downloaded lines go away now, everything else is saved
+        try:
+            self._flush_pending_removals()
+            self._save_urls_txt(quiet=True)
+        except Exception:
+            pass
         self._closed = True
         self.destroy()
 
@@ -1135,23 +1235,166 @@ class EHentaiGUI(tk.Tk):
 
     # ------------------------------------------------------------------ URLs.txt
 
+    def _editor_edit(self, action) -> None:
+        """Run action() on the batch editor even while it is locked (read-only)."""
+        previous = str(self._batch_editor.cget("state"))
+        self._batch_editor.configure(state="normal")
+        try:
+            action()
+        finally:
+            # Programmatic edits must not be undone with Ctrl+Z (it would mix with the user's)
+            self._batch_editor.edit_reset()
+            self._batch_editor.configure(state=previous)
+
+    def _replace_editor_line(self, line_no: int, text: str) -> None:
+        """Replace the text of one batch line, keeping its highlight colour."""
+        def action() -> None:
+            tags = self._batch_editor.tag_names(f"{line_no}.0")
+            self._batch_editor.delete(f"{line_no}.0", f"{line_no}.end")
+            self._batch_editor.insert(f"{line_no}.0", text)
+            for tag in tags:
+                if tag.endswith("_batch_line") or tag.startswith("task_"):
+                    self._batch_editor.tag_add(tag, f"{line_no}.0", f"{line_no}.end")
+        self._editor_edit(action)
+
+    def _editor_entries(self) -> list[tuple[int, str, str]]:
+        """Return (line number, url, gallery name) for every link line of the batch editor."""
+        from downloader import parse_url_line, remember_gallery_name
+        entries = []
+        lines = self._batch_editor.get("1.0", "end-1c").splitlines()
+        for line_no, line in enumerate(lines, start=1):
+            url, name = parse_url_line(line)
+            if url:
+                remember_gallery_name(url, name)
+                entries.append((line_no, url, name))
+        return entries
+
+    def _offer_duplicate_cleanup(self, ask_when_none: bool = False) -> str:
+        """Look for links to the same gallery and offer to keep only one of each.
+
+        Returns "removed", "kept" (user chose to keep them, or none found) or "cancel".
+        """
+        from downloader import find_duplicates, format_url_line, gallery_name
+        entries = self._editor_entries()
+        pairs = find_duplicates([url for _, url, _ in entries])
+        if not pairs:
+            if ask_when_none:
+                messagebox.showinfo("Duplicates", "No duplicate links found.")
+            return "kept"
+
+        lines_desc = []
+        for dup_idx, kept_idx in pairs[:15]:
+            dup_line, dup_url, _ = entries[dup_idx]
+            kept_line, kept_url, _ = entries[kept_idx]
+            name = gallery_name(kept_url) or gallery_name(dup_url)
+            label = f" – {name}" if name else ""
+            lines_desc.append(f"• line {dup_line} = line {kept_line}{label}")
+        if len(pairs) > 15:
+            lines_desc.append(f"… and {len(pairs) - 15} more")
+
+        answer = messagebox.askyesnocancel(
+            "Duplicate links",
+            f"{len(pairs)} link(s) point to a gallery already in the list:\n\n"
+            + "\n".join(lines_desc)
+            + "\n\nRemove the duplicates and keep one link per gallery?\n"
+            "(When one copy of a link is malformed, the valid one is kept.)\n\n"
+            "Yes = remove   ·   No = keep them (they will be skipped)   ·   Cancel = stop",
+        )
+        if answer is None:
+            return "cancel"
+        if not answer:
+            return "kept"
+
+        # Keep the gallery name of a removed copy if the kept line has none
+        for dup_idx, kept_idx in pairs:
+            kept_line, kept_url, kept_name = entries[kept_idx]
+            dup_name = entries[dup_idx][2]
+            if dup_name and not kept_name:
+                self._replace_editor_line(kept_line, format_url_line(kept_url, dup_name))
+
+        def delete_lines() -> None:
+            for dup_line in sorted((entries[d][0] for d, _ in pairs), reverse=True):
+                self._batch_editor.delete(f"{dup_line}.0", f"{dup_line + 1}.0")
+        self._editor_edit(delete_lines)
+        self._save_urls_txt()
+        self._q.put(("LOG", _ts(), "Duplicates", f"Removed {len(pairs)} duplicate link(s) from the list."))
+        return "removed"
+
+    def _remove_duplicates(self) -> None:
+        """'Duplicates' button: find duplicate links and remove them after confirmation."""
+        if self._guard_running():
+            return
+        self._offer_duplicate_cleanup(ask_when_none=True)
+
+    def _confirm_invalid_links(self, entries: list[tuple[int, str, str]], action: str) -> bool:
+        """Warn about malformed links (checked offline). Return False if the user cancels."""
+        from src.general_utils import validate_gallery_url
+        invalid = [(line_no, err) for line_no, url, _ in entries if (err := validate_gallery_url(url))]
+        if not invalid:
+            return True
+        details = "\n\n".join(f"• line {line_no}: {err}" for line_no, err in invalid[:5])
+        if len(invalid) > 5:
+            details += f"\n\n… and {len(invalid) - 5} more"
+        for line_no, _ in invalid:
+            self._batch_editor.tag_add("fail_batch_line", f"{line_no}.0", f"{line_no}.end")
+        return messagebox.askyesno(
+            "Invalid links",
+            f"{len(invalid)} link(s) are not valid (highlighted in red):\n\n{details}\n\n"
+            f"{action} anyway? Invalid links will fail.",
+        )
+
     def _load_urls_txt(self) -> None:
         """Load URLs.txt into the batch editor."""
+        self._flush_pending_removals()
         path = Path("URLs.txt")
         content = path.read_text(encoding="utf-8") if path.exists() else ""
-        self._batch_editor.delete("1.0", END)
-        self._batch_editor.insert("1.0", content)
+        def action() -> None:
+            self._batch_editor.delete("1.0", END)
+            self._batch_editor.insert("1.0", content)
+        self._editor_edit(action)
+        self._batch_editor.edit_modified(False)
 
-    def _save_urls_txt(self) -> None:
-        """Save the batch editor content to URLs.txt."""
-        content = self._batch_editor.get("1.0", END).rstrip("\n") + "\n"
-        Path("URLs.txt").write_text(content, encoding="utf-8")
-        self._status_var.set("URLs.txt saved.")
+    def _save_urls_txt(self, quiet: bool = False) -> None:
+        """Save the batch editor content to URLs.txt (quiet: no status-bar message)."""
+        content = self._batch_editor.get("1.0", END).strip("\n")
+        content = content + "\n" if content else ""
+        path = Path("URLs.txt")
+        # Write to a temporary file first: a crash mid-write never leaves URLs.txt half-empty
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_text(content, encoding="utf-8")
+        os.replace(tmp, path)
+        self._batch_editor.edit_modified(False)
+        if not quiet:
+            self._status_var.set("URLs.txt saved.")
+
+    def _autosave_tick(self) -> None:
+        """Every AUTOSAVE_INTERVAL seconds: save the batch list if it changed."""
+        try:
+            if not self._closed and self._batch_editor.edit_modified():
+                self._save_urls_txt(quiet=True)
+        except Exception as err:
+            self._q.put(("LOG", _ts(), "Autosave", f"Could not save URLs.txt: {err}"))
+        if not self._closed:
+            self.after(AUTOSAVE_INTERVAL * 1000, self._autosave_tick)
 
     def _clear_urls_txt(self) -> None:
-        """Empty both the batch editor and URLs.txt."""
-        self._batch_editor.delete("1.0", END)
-        Path("URLs.txt").write_text("", encoding="utf-8")
+        """Empty both the batch editor and URLs.txt, after a confirmation."""
+        if self._guard_running():
+            return
+        links = len(self._editor_entries())
+        if not self._batch_editor.get("1.0", "end-1c").strip():
+            return
+        if not messagebox.askyesno(
+            "Clear All",
+            f"Delete the whole batch list ({links} link{'s' if links != 1 else ''})?\n\n"
+            "URLs.txt will be emptied too. This cannot be undone.",
+            icon="warning",
+            default="no",
+        ):
+            return
+        self._flush_pending_removals()
+        self._editor_edit(lambda: self._batch_editor.delete("1.0", END))
+        self._save_urls_txt(quiet=True)
         self._status_var.set("URLs.txt cleared.")
 
     # ------------------------------------------------------------------ failed list
@@ -1160,11 +1403,13 @@ class EHentaiGUI(tk.Tk):
         """Collect retry candidates and show them (read-only)."""
         # Import lazily to avoid triggering heavy imports at startup
         from retry import collect_retry_urls
+        from downloader import format_url_line
         urls = collect_retry_urls()
         self._retry_list.configure(state="normal")
         self._retry_list.delete("1.0", END)
         if urls:
-            self._retry_list.insert("1.0", "\n".join(urls))
+            # One line per album: "URL  # Gallery name" (name shown when known)
+            self._retry_list.insert("1.0", "\n".join(format_url_line(url) for url in urls))
         else:
             self._retry_list.insert("1.0", "(no failed URLs found)")
         self._retry_list.configure(state="disabled")
@@ -1218,6 +1463,11 @@ class EHentaiGUI(tk.Tk):
         if not url:
             messagebox.showwarning("Missing URL", "Please enter a gallery URL.")
             return
+        from src.general_utils import validate_gallery_url
+        url_error = validate_gallery_url(url)
+        if url_error:
+            messagebox.showerror("Invalid link", url_error)
+            return
 
         fmt = self._get_selected_format()
         self._begin_download()
@@ -1233,29 +1483,228 @@ class EHentaiGUI(tk.Tk):
         if self._guard_running():
             return
         self._save_urls_txt()
+        self._clear_batch_marks()
 
-        lines = self._batch_editor.get("1.0", "end-1c").splitlines()
-        tasks = [
-            (idx, line.strip())
-            for idx, line in enumerate(lines, start=1)
-            if line.strip() and not line.strip().startswith("#")
-        ]
-        if not tasks:
+        if not self._editor_entries():
             messagebox.showwarning(
                 "No URLs",
                 "URLs.txt is empty.\nAdd at least one URL before starting.",
             )
             return
+        # 1) duplicates (with confirmation)  2) malformed links (offline check)
+        if self._offer_duplicate_cleanup() == "cancel":
+            return
+        tasks = self._editor_entries()
+        if not self._confirm_invalid_links(tasks, "Start the download"):
+            return
 
         fmt = self._get_selected_format()
-        self._begin_download()
+        self._begin_download(editor_editable=True)
         self._bar1_lbl.configure(text="Batch Total:")
         self._bar2_lbl.configure(text="Current Album:")
+        self._clear_batch_marks()
+
+        # Fresh live queue; the first scan claims every link currently in the list
+        with self._batch_lock:
+            self._batch_queue = queue.Queue()
+            self._verify_queue = queue.Queue()
+            self._batch_total = 0
+            self._batch_keys = {}
+            self._task_state = {}
+            self._verify_bad = set()
+            self._failed_task_ids = []
+            self._batch_accepting = True
+        self._batch_stop.clear()
+        self._scan_batch_editor()
+        to_check = self._verify_queue.qsize()
+
+        self._status_var.set(f"Batch download [{fmt}]: {self._batch_total} URL(s)")
+        if to_check:
+            self._q.put(("LOG", _ts(), "Verify",
+                         f"{to_check} link(s) not verified yet: checking them in parallel with the download."))
+            threading.Thread(target=self._run_batch_verify, daemon=True).start()
+        threading.Thread(
+            target=self._run_batch, args=(fmt, self._rename_var.get()), daemon=True,
+        ).start()
+
+    def _clear_batch_marks(self) -> None:
+        """Remove the line highlights (and the task tags of a finished batch) from the editor."""
+        self._flush_pending_removals()
+        for tag in ("queued_batch_line", "active_batch_line", "done_batch_line", "fail_batch_line"):
+            self._batch_editor.tag_remove(tag, "1.0", END)
+        for tag in self._batch_editor.tag_names():
+            if tag.startswith("task_"):
+                self._batch_editor.tag_delete(tag)
+
+    # ------------------------------------------------------------------ live batch queue
+
+    def _task_line(self, task_id: int) -> int | None:
+        """Current line number of a batch task, or None if the user deleted its line."""
+        ranges = self._batch_editor.tag_ranges(f"task_{task_id}")
+        if not ranges:
+            return None
+        return int(str(ranges[0]).split(".")[0])
+
+    def _scan_batch_editor(self) -> None:
+        """GUI thread: give every link line not yet claimed to the running batch.
+
+        Claimed lines get a "task_<id>" tag. Links that were never verified also go to the
+        parallel link check. A second link to a gallery already in this batch is skipped.
+        """
+        from downloader import gallery_key, gallery_status, parse_url_line
+        from src.general_utils import validate_gallery_url
+
+        lines = self._batch_editor.get("1.0", "end-1c").splitlines()
+        # Lines already claimed (a task tag anywhere on the line, even if the user typed at its start)
+        claimed: set[int] = set()
+        for tag in self._batch_editor.tag_names():
+            if tag.startswith("task_"):
+                ranges = self._batch_editor.tag_ranges(tag)
+                for i in range(0, len(ranges), 2):
+                    first = int(str(ranges[i]).split(".")[0])
+                    last = int(str(ranges[i + 1]).split(".")[0])
+                    claimed.update(range(first, last + 1))
+        with self._batch_lock:
+            if not self._batch_accepting:
+                return
+            for line_no, line in enumerate(lines, start=1):
+                if line_no in claimed:
+                    continue
+                url, name = parse_url_line(line)
+                if not url:
+                    continue
+                valid = not validate_gallery_url(url)
+                key = gallery_key(url)
+                dup = key in self._batch_keys and (self._batch_keys[key] or not valid)
+                if not dup:
+                    self._batch_keys[key] = valid
+
+                self._batch_seq += 1
+                task_id = self._batch_seq
+                self._batch_total += 1
+                self._task_state[task_id] = "queued"
+                self._batch_editor.tag_add(f"task_{task_id}", f"{line_no}.0", f"{line_no}.end")
+                self._batch_editor.tag_add("queued_batch_line", f"{line_no}.0", f"{line_no}.end")
+                task = {"id": task_id, "url": url, "name": name, "dup": dup}
+                self._batch_queue.put(task)
+                if valid and not dup and not gallery_status(url):
+                    self._verify_queue.put(task)
+
+    def _on_task_active(self, task_id: int, cur_idx: int, total_cnt: int, label: str) -> None:
+        """Highlight the line being downloaded."""
         self._batch_editor.tag_remove("active_batch_line", "1.0", END)
-        self._batch_editor.tag_remove("done_batch_line", "1.0", END)
-        self._batch_editor.tag_remove("fail_batch_line", "1.0", END)
-        self._status_var.set(f"Batch download [{fmt}]: {len(tasks)} URL(s)")
-        threading.Thread(target=self._run_batch, args=(fmt, self._rename_var.get()), daemon=True).start()
+        line_no = self._task_line(task_id)
+        if line_no:
+            self._batch_editor.tag_remove("queued_batch_line", f"{line_no}.0", f"{line_no}.end")
+            self._batch_editor.tag_add("active_batch_line", f"{line_no}.0", f"{line_no}.end")
+            self._batch_editor.see(f"{line_no}.0")
+        self._status_var.set(f"[{cur_idx}/{total_cnt}] {label}")
+
+    def _on_task_done(self, task_id: int, is_ok: bool) -> None:
+        """Colour a finished line; downloaded lines are removed after DONE_LINE_REMOVE_DELAY."""
+        line_no = self._task_line(task_id)
+        if line_no:
+            for tag in ("queued_batch_line", "active_batch_line", "done_batch_line", "fail_batch_line"):
+                self._batch_editor.tag_remove(tag, f"{line_no}.0", f"{line_no}.end")
+            tag = "done_batch_line" if is_ok else "fail_batch_line"
+            self._batch_editor.tag_add(tag, f"{line_no}.0", f"{line_no}.end")
+        if is_ok:
+            handle = self.after(DONE_LINE_REMOVE_DELAY * 1000, lambda: self._remove_task_line(task_id))
+            self._pending_removals[task_id] = handle
+        else:
+            self._failed_task_ids.append(task_id)
+
+    def _remove_task_line(self, task_id: int, save: bool = True) -> None:
+        """Delete the editor line of a batch task (if it still exists)."""
+        self._pending_removals.pop(task_id, None)
+        line_no = self._task_line(task_id)
+        if line_no:
+            self._editor_edit(
+                lambda: self._batch_editor.delete(f"{line_no}.0", f"{line_no + 1}.0")
+            )
+        self._batch_editor.tag_delete(f"task_{task_id}")
+        if save and line_no:
+            self._save_urls_txt(quiet=True)
+
+    def _flush_pending_removals(self) -> None:
+        """Remove at once every downloaded line still waiting for its timer."""
+        if not getattr(self, "_pending_removals", None):
+            return
+        for task_id, handle in list(self._pending_removals.items()):
+            try:
+                self.after_cancel(handle)
+            except Exception:
+                pass
+            self._remove_task_line(task_id, save=False)
+        self._save_urls_txt(quiet=True)
+
+    def _on_batch_finished(self) -> None:
+        """GUI thread: the batch is over. Failed lines leave the list (they are in Retry Failed)."""
+        for task_id in self._failed_task_ids:
+            self._remove_task_line(task_id, save=False)
+        self._failed_task_ids = []
+        self._batch_editor.tag_remove("queued_batch_line", "1.0", END)
+        self._batch_editor.tag_remove("active_batch_line", "1.0", END)
+        self._save_urls_txt(quiet=True)
+        self._load_retry_list()
+
+    def _start_verify(self) -> None:
+        """'Verify Links' button: check every link online without downloading anything."""
+        if self._guard_running():
+            return
+        self._save_urls_txt()
+        self._clear_batch_marks()
+        if not self._editor_entries():
+            messagebox.showwarning("No URLs", "The list is empty.")
+            return
+        if self._offer_duplicate_cleanup() == "cancel":
+            return
+        entries = self._editor_entries()
+        self._begin_download()
+        self._bar1_lbl.configure(text="Verified:")
+        self._bar2_lbl.configure(text="")
+        self._status_var.set(f"Verifying {len(entries)} link(s)…")
+        threading.Thread(target=self._run_verify, args=(entries,), daemon=True).start()
+
+    def _on_verify_done(self, ok_count: int, bad_count: int, domains: dict) -> None:
+        """Re-enable the UI, save the annotated list and print the verification summary."""
+        self._running = False
+        self._set_buttons_state("normal")
+        self._save_urls_txt()
+        sources = ", ".join(f"{d}: {n}" for d, n in sorted(domains.items())) or "none"
+        summary = f"{ok_count} valid, {bad_count} with problems. Download source → {sources}"
+        self._q.put(("LOG", _ts(), "Verify completed", summary))
+        self._status_var.set(("✔ " if not bad_count else "⚠ ") + "Verify: " + summary)
+        self._offer_sort_by_size()
+
+    def _offer_sort_by_size(self) -> None:
+        """After a verification, offer to move the galleries with fewer images to the top."""
+        from downloader import gallery_status, parse_url_line, sort_lines_by_size
+        lines = self._batch_editor.get("1.0", "end-1c").splitlines()
+        sorted_lines = sort_lines_by_size(lines)
+        if sorted_lines is None:
+            return
+        if not messagebox.askyesno(
+            "Download order",
+            "Download the galleries with fewer images first?\n\n"
+            "The list will be sorted by number of images (smallest first); "
+            "links with problems go to the bottom. Comment and blank lines stay where they are.",
+        ):
+            return
+
+        def action() -> None:
+            self._batch_editor.delete("1.0", END)
+            self._batch_editor.insert("1.0", "\n".join(sorted_lines))
+            # Re-apply the verify colours: line numbers have changed
+            for line_no, line in enumerate(sorted_lines, start=1):
+                url, _ = parse_url_line(line)
+                status = gallery_status(url) if url else ""
+                if status:
+                    tag = "done_batch_line" if status == "GOOD" else "fail_batch_line"
+                    self._batch_editor.tag_add(tag, f"{line_no}.0", f"{line_no}.end")
+        self._editor_edit(action)
+        self._save_urls_txt(quiet=True)
+        self._q.put(("LOG", _ts(), "Download order", "List sorted: galleries with fewer images first."))
 
     def _start_retry(self) -> None:
         """Start re-downloading every album in the failed queue in a background thread."""
@@ -1282,10 +1731,10 @@ class EHentaiGUI(tk.Tk):
         self._status_var.set(f"Retrying [{fmt}] {len(urls)} failed URL(s)…")
         threading.Thread(target=self._run_retry, args=(fmt, self._rename_var.get()), daemon=True).start()
 
-    def _begin_download(self) -> None:
+    def _begin_download(self, editor_editable: bool = False) -> None:
         """Reset progress bars and log, and lock the controls."""
         self._running = True
-        self._set_buttons_state("disabled")
+        self._set_buttons_state("disabled", editor_editable=editor_editable)
         self._clear_log()
         self._bar1["value"] = 0
         self._bar1_pct.configure(text="0%")
@@ -1313,66 +1762,176 @@ class EHentaiGUI(tk.Tk):
         finally:
             self._q.put(("DONE", success, failed_by_url))
 
+    def _next_batch_task(self) -> dict | None:
+        """Worker thread: next task of the live queue, or None when nothing is left.
+
+        Before giving up it asks the GUI to look once more for lines added in the meantime;
+        the queue is closed under the lock, so a line added later is never lost (it simply
+        stays in the list for the next batch).
+        """
+        try:
+            return self._batch_queue.get_nowait()
+        except queue.Empty:
+            pass
+        self._batch_scan_done.clear()
+        self._q.put(("BATCH_SCAN",))
+        self._batch_scan_done.wait(timeout=5)
+        with self._batch_lock:
+            try:
+                return self._batch_queue.get_nowait()
+            except queue.Empty:
+                self._batch_accepting = False
+                return None
+
     def _run_batch(self, image_format: str = "original", rename: bool = RENAME_SEQUENTIAL) -> None:
-        """Worker thread: download every album of the batch list, one after another."""
+        """Worker thread: download the batch list one album after another.
+
+        Tasks come from a live queue filled by the GUI thread, so links added at the bottom
+        of the list while the batch runs are downloaded too.
+        """
         success = True
         failed_by_url: dict[str, list[str]] = {}
+        done_count = 0
         try:
-            from src.config import URLS_FILE
-            from src.file_utils import write_file
-            from downloader import (
-                download_album,
-                save_failed_urls,
-            )
+            from downloader import download_album, format_url_line, gallery_name, update_failed_url
 
-            lines = self._batch_editor.get("1.0", "end-1c").splitlines()
-            tasks: list[tuple[int, str]] = []
-            for line_idx, line in enumerate(lines, start=1):
-                u = line.strip()
-                if u and not u.startswith("#"):
-                    tasks.append((line_idx, u))
+            append_session_banner(f"BATCH DOWNLOAD START ({self._batch_total} albums)")
 
-            total_items = len(tasks)
-            append_session_banner(f"BATCH DOWNLOAD START ({total_items} albums)")
-            failed_albums: list[str] = []
+            while True:
+                task = self._next_batch_task()
+                if task is None:
+                    break
+                task_id, url, name = task["id"], task["url"], task["name"]
+                with self._batch_lock:
+                    self._task_state[task_id] = "active"
+                    total_items = self._batch_total
+                self._q.put(("TASK_ACTIVE", task_id, done_count + 1, total_items, name or gallery_name(url) or url))
 
-            for idx, (line_no, url) in enumerate(tasks):
-                self._q.put(("BATCH_HIGHLIGHT", line_no, idx + 1, total_items, url))
+                if task["dup"]:
+                    self._q.put(("LOG", _ts(), "Duplicate",
+                                 f"{name or url}: same gallery as a link already in the batch, skipped."))
+                    ok, failed_items = True, []
+                elif task_id in self._verify_bad:
+                    # The parallel link check already found this gallery unreadable
+                    self._q.put(("LOG", _ts(), "Skipped",
+                                 f"{url}: link check failed, not downloaded (added to Retry Failed)."))
+                    update_failed_url(url, has_failures=True)
+                    ok, failed_items = False, []
+                else:
+                    lm = GUILiveManager(
+                        log_queue=self._q,
+                        mode="batch",
+                        batch_idx=done_count,
+                        batch_total=total_items,
+                    )
+                    ok, failed_items = download_album(
+                        url, lm, image_format=image_format, rename_sequential=rename, name_hint=name,
+                    )
+                    # Rewrite the line as "STATUS | IMAGES | TITLE | LINK" with what is now known
+                    self._q.put(("TASK_ANNOTATE", task_id, format_url_line(url)))
 
-                lm = GUILiveManager(
-                    log_queue=self._q,
-                    mode="batch",
-                    batch_idx=idx,
-                    batch_total=total_items,
-                    line_no=line_no,
-                )
-                ok, failed_items = download_album(url, lm, image_format=image_format, rename_sequential=rename)
+                with self._batch_lock:
+                    self._task_state[task_id] = "done"
+                done_count += 1
                 if not ok or failed_items:
-                    failed_albums.append(url)
                     failed_by_url[url] = failed_items
                     success = False
-                    self._q.put(("BATCH_LINE_DONE", line_no, False))
+                    self._q.put(("TASK_DONE", task_id, False))
                 else:
-                    self._q.put(("BATCH_LINE_DONE", line_no, True))
+                    self._q.put(("TASK_DONE", task_id, True))
 
-            save_failed_urls(failed_albums)
-
-            # Clear URLs.txt after batch completes; failed items are kept in failed_downloads.txt
-            write_file(URLS_FILE, "")
-
+            # failed_downloads.txt is already updated album by album by download_album():
+            # albums that failed in earlier sessions stay in the queue.
             self._q.put((
                 "PROGRESS_BARS",
-                1.0, f"{total_items}/{total_items} (100%)",
+                1.0, f"{done_count}/{done_count} (100%)",
                 1.0, "100%",
             ))
-
-            self.after(0, self._load_retry_list)
-            self.after(0, self._load_urls_txt)
         except Exception as exc:
             self._q.put(("LOG", _ts(), "ERROR", str(exc)))
             success = False
         finally:
+            with self._batch_lock:
+                self._batch_accepting = False
+            self._batch_stop.set()
+            self._q.put(("BATCH_FINISHED",))
             self._q.put(("DONE", success, failed_by_url))
+
+    def _run_batch_verify(self) -> None:
+        """Worker thread: check not-yet-verified links while the batch downloads.
+
+        Only links still waiting in the queue are checked. A link found BAD is shown in red
+        and skipped by the downloader; a good one gets its title and image count at once.
+        """
+        try:
+            from downloader import courtesy_pause, format_url_line, verify_gallery
+            from src.general_utils import create_session
+
+            session = create_session()
+            checked = 0
+            while not self._batch_stop.is_set():
+                try:
+                    task = self._verify_queue.get(timeout=0.5)
+                except queue.Empty:
+                    continue
+                with self._batch_lock:
+                    if self._task_state.get(task["id"]) != "queued":
+                        continue  # already downloading or done: nothing to check
+                result = verify_gallery(task["url"], session=session)
+                checked += 1
+                with self._batch_lock:
+                    still_queued = self._task_state.get(task["id"]) == "queued"
+                if result["ok"]:
+                    if still_queued:
+                        self._q.put(("TASK_ANNOTATE", task["id"], format_url_line(task["url"], result["title"])))
+                    self._q.put(("LOG", _ts(), "Link OK",
+                                 f"\"{result['title']}\" — {result['images']} images — from {result['domain']}"))
+                elif still_queued:
+                    self._verify_bad.add(task["id"])
+                    self._q.put(("TASK_ANNOTATE", task["id"], format_url_line(task["url"])))
+                    self._q.put(("TASK_VERIFIED_BAD", task["id"]))
+                    self._q.put(("LOG", _ts(), "Link error", f"{task['url']}: {result['error']}"))
+                if result["domain"]:
+                    courtesy_pause()
+        except Exception as exc:
+            self._q.put(("LOG", _ts(), "ERROR", f"Link check: {exc}"))
+
+    def _run_verify(self, entries: list[tuple[int, str, str]]) -> None:
+        """Worker thread: check each link online (title, size, source site) without downloading."""
+        ok_count = bad_count = 0
+        domains: dict[str, int] = {}
+        try:
+            from downloader import courtesy_pause, format_url_line, verify_gallery
+            from src.general_utils import create_session
+
+            session = create_session()
+            total = len(entries)
+            for idx, (line_no, url, _name) in enumerate(entries):
+                self._q.put(("BATCH_HIGHLIGHT", line_no, idx + 1, total, url))
+                result = verify_gallery(url, session=session)
+                if result["ok"]:
+                    ok_count += 1
+                    domains[result["domain"]] = domains.get(result["domain"], 0) + 1
+                    note = f" ({result['note']})" if result["note"] else ""
+                    self._q.put(("LOG", _ts(), "Link OK",
+                                 f"Line {line_no}: \"{result['title']}\" — {result['images']} images — "
+                                 f"from {result['domain']}{note}"))
+                    self._q.put(("BATCH_ANNOTATE", line_no, format_url_line(url, result["title"])))
+                    self._q.put(("BATCH_LINE_DONE", line_no, True))
+                else:
+                    bad_count += 1
+                    self._q.put(("LOG", _ts(), "Link error", f"Line {line_no}: {result['error']}"))
+                    self._q.put(("BATCH_ANNOTATE", line_no, format_url_line(url)))
+                    self._q.put(("BATCH_LINE_DONE", line_no, False))
+                frac = (idx + 1) / total
+                self._q.put(("UPDATE_BAR1", frac, f"{idx + 1}/{total} ({frac * 100:.0f}%)"))
+                # Only pause between real requests (malformed links are checked offline)
+                if idx < total - 1 and result["domain"]:
+                    courtesy_pause()
+        except Exception as exc:
+            self._q.put(("LOG", _ts(), "ERROR", str(exc)))
+        finally:
+            self._q.put(("VERIFY_DONE", ok_count, bad_count, domains))
 
     def _run_retry(self, image_format: str = "original", rename: bool = RENAME_SEQUENTIAL) -> None:
         """Worker thread: retry every album of the failed queue and keep only those still failing."""
@@ -1380,7 +1939,7 @@ class EHentaiGUI(tk.Tk):
         failed_by_url: dict[str, list[str]] = {}
         try:
             from retry import collect_retry_urls
-            from downloader import download_album, save_failed_urls
+            from downloader import download_album, gallery_name, save_failed_urls
 
             retry_urls = collect_retry_urls()
             total = len(retry_urls)
@@ -1389,7 +1948,7 @@ class EHentaiGUI(tk.Tk):
 
             for idx, url in enumerate(retry_urls):
                 line_no = idx + 1
-                self._q.put(("RETRY_HIGHLIGHT", line_no, idx + 1, total, url))
+                self._q.put(("RETRY_HIGHLIGHT", line_no, idx + 1, total, gallery_name(url) or url))
 
                 lm = GUILiveManager(
                     log_queue=self._q,
@@ -1398,7 +1957,10 @@ class EHentaiGUI(tk.Tk):
                     batch_total=total,
                     line_no=line_no,
                 )
-                ok, failed_items = download_album(url, lm, image_format=image_format, rename_sequential=rename)
+                ok, failed_items = download_album(
+                    url, lm, image_format=image_format, rename_sequential=rename,
+                    name_hint=gallery_name(url),
+                )
                 if not ok or failed_items:
                     remaining.append(url)
                     failed_by_url[url] = failed_items
@@ -1420,7 +1982,7 @@ class EHentaiGUI(tk.Tk):
                 1.0, "100%",
             ))
 
-            self.after(0, self._load_retry_list)
+            self._q.put(("RELOAD_LISTS",))  # reload both lists on the GUI thread
         except Exception as exc:
             self._q.put(("LOG", _ts(), "ERROR", str(exc)))
             success = False

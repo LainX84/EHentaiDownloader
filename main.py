@@ -18,6 +18,8 @@ from downloader import (
     download_album,
     initialize_managers,
     load_failed_urls,
+    parse_url_line,
+    remember_gallery_name,
     save_failed_urls,
 )
 from src.config import URLS_FILE
@@ -58,7 +60,13 @@ async def main() -> None:
     if not Path(URLS_FILE).exists():
         write_file(URLS_FILE)
     # One URL per line; blank lines and lines starting with '#' are ignored
-    urls = [url.strip() for url in read_file(URLS_FILE) if url.strip() and not url.strip().startswith("#")]
+    # Lines may carry the gallery name as a comment ("URL  # name"); it is kept for messages
+    urls = []
+    for line in read_file(URLS_FILE):
+        url, name = parse_url_line(line)
+        if url:
+            remember_gallery_name(url, name)
+            urls.append(url)
     retry_urls = load_failed_urls()
     urls_to_process = merge_urls(urls, retry_urls)
 
