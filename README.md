@@ -2,7 +2,7 @@
 
 > A Python tool to download E-Hentai and ExHentai galleries, with a simple desktop GUI and a command-line interface.
 
-![Demo](assets/demo.gif)
+![Demo](assets/demo.jpg)
 
 > This project is a fork of [Lysagxra/EHentaiDownloader](https://github.com/Lysagxra/EHentaiDownloader), extended with a GUI, image format conversion, sequential renaming, smarter retries and more. It is distributed under the same license (GPL-3.0).
 
@@ -171,9 +171,9 @@ All settings are in [`src/config.py`](src/config.py):
 
 1. The link is checked (format), then the gallery page is read to get the title, the number of images and the list of gallery pages. If the requested site does not answer correctly, the other one (e-hentai.org ↔ exhentai.org) is tried; the log line `Source` says which one is used.
 2. For every image page, the direct image link is taken from the image viewer page.
-3. Images are downloaded in parallel, converted if needed, and saved as `NN_originalname.ext` while the album is in progress.
-4. When nothing failed and every page is on disk, the folder is renamed to the clean gallery title and, if enabled, the images are renamed `01…N`.
-5. Albums with missing images are written to `failed_downloads.txt` for a later retry; images already downloaded are not downloaded again.
+3. Images are downloaded in parallel into `temp/<album>/`, converted if needed, and saved as `NN_originalname.ext` while the album is in progress.
+4. When nothing failed and every page is on disk, the images are renamed `01…N` (if enabled) and the album is moved to `Downloads/<clean gallery title>`.
+5. Albums with missing images stay in `temp/` and are written to `failed_downloads.txt` for a later retry; images already downloaded are not downloaded again.
 
 ---
 
@@ -199,6 +199,7 @@ EHentaiDownloader/
 ├── main.py                  # CLI: batch download from URLs.txt
 ├── retry.py                 # CLI: retry failed_downloads.txt
 ├── cookies.example.json     # Template for your ExHentai cookies
+├── .pylintrc                # Pylint settings used by the GitHub Actions check
 ├── requirements.txt
 ├── assets/                  # README images
 └── src/
