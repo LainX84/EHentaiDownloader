@@ -196,6 +196,7 @@ cython_debug/
 # EHentaiDownloader: personal data and runtime files (never commit)
 # ---------------------------------------------------------------
 cookies.json
+settings.json
 cookies.txt
 URLs.txt
 failed_downloads.txt

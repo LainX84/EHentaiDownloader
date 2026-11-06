@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import atexit
 import datetime
+import json
 import logging
 import os
 import queue
@@ -44,7 +45,14 @@ from tkinter import (
 import tkinter as tk
 import tkinter.ttk as ttk
 
-from src.config import AUTOSAVE_INTERVAL, CREATE_CBZ, DONE_LINE_REMOVE_DELAY, RENAME_SEQUENTIAL, SESSION_LOG
+from src.config import (
+    AUTOSAVE_INTERVAL,
+    CREATE_CBZ,
+    DONE_LINE_REMOVE_DELAY,
+    RENAME_SEQUENTIAL,
+    SESSION_LOG,
+    SETTINGS_FILE,
+)
 from src.file_utils import append_session_banner, append_session_log
 
 # ---------------------------------------------------------------------------
@@ -361,6 +369,9 @@ class EHentaiGUI(tk.Tk):
         self._failed_task_ids: list[int] = []    # ids that failed (removed when the batch ends)
         self._pending_removals: dict[int, str] = {}  # id -> after() handle of green lines
 
+        # GUI choices saved at the last run (format, Auto Rename, CBZ archive)
+        self._settings = self._load_settings()
+
         self._setup_styles()
         self._build_ui()
         self._install_logging()
@@ -482,8 +493,10 @@ class EHentaiGUI(tk.Tk):
             "PNG (.png)",
             "WEBP (.webp)",
         ]
-        self._format_var = StringVar(value=self._format_options[0])
-        self._prev_format = self._format_options[0]
+        saved_format = self._settings.get("image_format")
+        initial_format = saved_format if saved_format in self._format_options else self._format_options[0]
+        self._format_var = StringVar(value=initial_format)
+        self._prev_format = initial_format
 
         self._format_cb = ttk.Combobox(
             hdr_right,
@@ -497,7 +510,7 @@ class EHentaiGUI(tk.Tk):
         self._format_cb.bind("<<ComboboxSelected>>", self._on_format_changed)
 
         # Sequential rename (01..N) once an album is complete
-        self._rename_var = BooleanVar(value=RENAME_SEQUENTIAL)
+        self._rename_var = BooleanVar(value=bool(self._settings.get("auto_rename", RENAME_SEQUENTIAL)))
         self._rename_btn = tk.Button(
             hdr_right,
             bg=PANEL, font=FONT_SMALL,
@@ -508,7 +521,7 @@ class EHentaiGUI(tk.Tk):
         self._refresh_rename_btn()
 
         # Pack each completed album into a .cbz (comic book archive) and delete the images
-        self._cbz_var = BooleanVar(value=CREATE_CBZ)
+        self._cbz_var = BooleanVar(value=bool(self._settings.get("cbz_archive", CREATE_CBZ)))
         self._cbz_btn = tk.Button(
             hdr_right,
             bg=PANEL, font=FONT_SMALL,
@@ -1059,11 +1072,39 @@ class EHentaiGUI(tk.Tk):
                 "Tip: use 'AUTO' to convert static images to JPG while keeping animations.",
             )
         self._prev_format = new_format
+        self._save_settings()
+
+    # ------------------------------------------------------------------ remembered settings
+
+    @staticmethod
+    def _load_settings() -> dict:
+        """Read the GUI choices saved by the last run (empty dict if missing or unreadable)."""
+        try:
+            data = json.loads(Path(SETTINGS_FILE).read_text(encoding="utf-8"))
+            return data if isinstance(data, dict) else {}
+        except (OSError, ValueError):
+            return {}
+
+    def _save_settings(self) -> None:
+        """Save the current GUI choices so they are restored at the next start."""
+        data = {
+            "image_format": self._format_var.get(),
+            "auto_rename": bool(self._rename_var.get()),
+            "cbz_archive": bool(self._cbz_var.get()),
+        }
+        path = Path(SETTINGS_FILE)
+        tmp = path.with_name(f"{path.name}.part")
+        try:
+            tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+            os.replace(tmp, path)
+        except OSError as err:
+            logging.warning(f"Could not save {SETTINGS_FILE}: {err}")
 
     def _toggle_rename(self) -> None:
         """Flip the 'Auto Rename' option (rename images 01…N when an album is complete)."""
         self._rename_var.set(not self._rename_var.get())
         self._refresh_rename_btn()
+        self._save_settings()
 
     def _refresh_rename_btn(self) -> None:
         """Update the 'Auto Rename' button text and colour to match its state."""
@@ -1076,6 +1117,7 @@ class EHentaiGUI(tk.Tk):
         """Flip the 'CBZ archive' option."""
         self._cbz_var.set(not self._cbz_var.get())
         self._refresh_cbz_btn()
+        self._save_settings()
 
     def _refresh_cbz_btn(self) -> None:
         """Update the 'CBZ archive' button text and colour to match its state."""
@@ -1248,6 +1290,7 @@ class EHentaiGUI(tk.Tk):
         try:
             self._flush_pending_removals()
             self._save_urls_txt(quiet=True)
+            self._save_settings()
         except Exception:
             pass
         self._closed = True

@@ -12,6 +12,7 @@ TEMP_FOLDER = "temp"            # Albums are downloaded here and moved to DOWNLO
 URLS_FILE = "URLs.txt"         # The file containing the list of URLs to process.
 SESSION_LOG = "session.log"    # The file where session logs will be recorded.
 FAILED_URLS_FILE = "failed_downloads.txt"  # Albums to retry in next runs.
+SETTINGS_FILE = "settings.json"  # GUI choices remembered between runs (format, Auto Rename, CBZ).
 
 # ============================
 # Download Settings

@@ -88,6 +88,7 @@ python EHentaiDownloader.pyw
 | **Image Format** | Output format for all downloads (see the table below). |
 | **Auto Rename** | ON/OFF: rename images `01…N` when an album is complete. |
 | **CBZ archive** | ON/OFF: save each completed album as `Downloads/<gallery title>.cbz` instead of a folder of images. |
+| *Remembered settings* | Image Format, Auto Rename and CBZ archive are saved in `settings.json` as soon as you change them and restored at the next start (delete the file to go back to the `src/config.py` defaults). |
 | **Open Downloads** | Button on the right of the tab bar (always visible): opens the `Downloads` folder. |
 | **Single Download** tab | Paste one gallery URL and press *Start Download*. |
 | **Batch Download** tab | Editor for `URLs.txt`: one URL per line, lines starting with `#` are skipped. *Start Batch* first checks for duplicates and malformed links. The list is saved automatically every few seconds; while the batch runs you can keep adding links at the bottom and they are queued too. Links never verified are checked online in parallel with the download (unreadable ones are skipped and go to *Retry Failed*). Downloaded lines turn green and disappear after ~45 s; *Clear All* asks for confirmation. |
@@ -157,8 +158,8 @@ All settings are in [`src/config.py`](src/config.py):
 | `DONE_LINE_REMOVE_DELAY` | `45` | Seconds a downloaded (green) line stays in the batch list before being removed. |
 | `MAX_WORKERS` | `5` | Images downloaded in parallel. |
 | `DEFAULT_IMAGE_FORMAT` | `auto` | Format used by the command-line scripts. |
-| `RENAME_SEQUENTIAL` | `True` | Rename images `01…N` when an album is complete (initial state of the GUI button). |
-| `CREATE_CBZ` | `False` | Save each completed album as `Downloads/<gallery title>.cbz` instead of a folder (initial state of the GUI button; also used by the CLI). |
+| `RENAME_SEQUENTIAL` | `True` | Rename images `01…N` when an album is complete (initial state of the GUI button on first start). |
+| `CREATE_CBZ` | `False` | Save each completed album as `Downloads/<gallery title>.cbz` instead of a folder (initial state of the GUI button on first start; also used by the CLI). |
 | `IMAGE_SERVER_RETRIES` | `3` | Different image servers tried per page. |
 | `IMAGE_FETCH_RETRIES` | `3` | Attempts on the same image server before switching. |
 | `PAGE_FETCH_RETRIES` | `3` | Attempts for HTML pages on temporary errors. |
