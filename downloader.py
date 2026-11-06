@@ -388,6 +388,7 @@ def download_album(
     image_format: str = DEFAULT_IMAGE_FORMAT,
     rename_sequential: bool | None = None,
     name_hint: str = "",
+    create_cbz: bool | None = None,
 ) -> tuple[bool, list[str]]:
     """Download an album using the provided live manager.
 
@@ -407,6 +408,7 @@ def download_album(
             live_manager=live_manager,
             image_format=image_format,
             rename_sequential=rename_sequential,
+            create_cbz=create_cbz,
         )
         remember_gallery_info(
             url,

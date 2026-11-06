@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import threading
 import time
+import zipfile
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import urlparse
@@ -19,6 +20,7 @@ from urllib.parse import urlparse
 from requests import Response, Session
 
 from src.config import (
+    CREATE_CBZ,
     DOWNLOAD_FOLDER,
     IMAGE_FETCH_RETRIES,
     IMAGE_SERVER_RETRIES,
@@ -46,6 +48,14 @@ _LOCAL_INDEX_RE = re.compile(r"^(\d+)(?:_|$)")
 # E-Hentai serves this placeholder instead of the real image when the image quota is exhausted
 _QUOTA_EXCEEDED_MARKERS = ("/509.gif", "/509s.gif")
 
+# Suffix of temporary files: an image is written as "<name>.part" and renamed only when complete,
+# so an interrupted run can never leave a truncated file that looks like a finished page.
+PART_SUFFIX = ".part"
+
+# Format names for ImageMagick's "FORMAT:path" output syntax (needed because ".part" hides the type)
+_MAGICK_FORMATS = {"jpg": "JPEG", "jpeg": "JPEG", "png": "PNG", "webp": "WEBP"}
+_PIL_FORMATS = {"jpg": "JPEG", "jpeg": "JPEG", "png": "PNG", "webp": "WEBP"}
+
 
 class AlbumDownloader:
     """Handles the process of downloading an image album.
@@ -60,9 +70,11 @@ class AlbumDownloader:
         live_manager: LiveManager,
         image_format: str = "original",
         rename_sequential: bool | None = None,
+        create_cbz: bool | None = None,
     ) -> None:
         """Initialize the AlbumDownloader with album URL, live manager, and optional format."""
         self.rename_sequential = RENAME_SEQUENTIAL if rename_sequential is None else bool(rename_sequential)
+        self.create_cbz = CREATE_CBZ if create_cbz is None else bool(create_cbz)
         # Fail fast with a clear message on malformed links (e.g. a truncated token)
         url_error = validate_gallery_url(url)
         if url_error:
@@ -128,6 +140,49 @@ class AlbumDownloader:
         """Format page index with dynamic zero padding based on total images (e.g. 01, 001, 0001)."""
         return f"{page_idx:0{self.index_width}d}"
 
+    @staticmethod
+    def _part_path(target_path: Path) -> Path:
+        """Return the temporary ".part" path used while target_path is being written."""
+        return target_path.with_name(f"{target_path.name}{PART_SUFFIX}")
+
+    @staticmethod
+    def _discard(path: Path) -> None:
+        """Delete a file if it exists, ignoring errors."""
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+    def _save_bytes(self, target_path: Path, content: bytes) -> None:
+        """Write bytes to "<target>.part" and rename it to target_path only once fully written."""
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        part = self._part_path(target_path)
+        try:
+            with part.open("wb") as fh:
+                fh.write(content)
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.replace(part, target_path)
+        except BaseException:
+            self._discard(part)
+            raise
+
+    def _clean_stale_parts(self) -> None:
+        """Remove ".part" leftovers of an interrupted run (they are never complete images)."""
+        folder = Path(self.download_path)
+        if not folder.is_dir():
+            return
+        removed = 0
+        for f in folder.glob(f"*{PART_SUFFIX}"):
+            if f.is_file():
+                self._discard(f)
+                removed += 1
+        if removed:
+            self.live_manager.update_log(
+                "Resume",
+                f"Removed {removed} incomplete file(s) left by an interrupted download.",
+            )
+
     def _is_image_animated(self, content: bytes) -> bool:
         """Check if image content has animation / multiple frames."""
         try:
@@ -160,13 +215,16 @@ class AlbumDownloader:
         if not magick_bin:
             return False
 
+        part = self._part_path(target_path)
         try:
             cmd = [magick_bin, "-"]
             if ext in ("jpeg", "jpg"):
                 cmd.extend(["-background", "white", "-alpha", "remove", "-alpha", "off", "-quality", "95"])
             elif ext == "webp":
                 cmd.extend(["-quality", "95"])
-            cmd.append(str(target_path))
+            magick_fmt = _MAGICK_FORMATS.get(ext)
+            # The ".part" extension hides the type, so name the output format explicitly
+            cmd.append(f"{magick_fmt}:{part}" if magick_fmt else str(part))
 
             kwargs = {}
             if os.name == "nt":
@@ -177,12 +235,21 @@ class AlbumDownloader:
                 kwargs["startupinfo"] = startupinfo
 
             result = subprocess.run(cmd, input=content, capture_output=True, timeout=30, check=False, **kwargs)
-            return result.returncode == 0 and target_path.exists() and target_path.stat().st_size > 0
+            if result.returncode == 0 and part.exists() and part.stat().st_size > 0:
+                os.replace(part, target_path)
+                return True
+            self._discard(part)
+            return False
         except Exception:
+            self._discard(part)
             return False
 
     def _convert_with_pillow(self, content: bytes, target_path: Path, ext: str) -> bool:
         """Attempt conversion using Pillow (PIL)."""
+        if ext not in _PIL_FORMATS:
+            self._save_bytes(target_path, content)
+            return True
+        part = self._part_path(target_path)
         try:
             import io
             from PIL import Image
@@ -194,17 +261,20 @@ class AlbumDownloader:
                         bg = Image.new("RGB", img.size, (255, 255, 255))
                         img_rgba = img.convert("RGBA")
                         bg.paste(img_rgba, mask=img_rgba.split()[3])
-                        bg.save(target_path, "JPEG", quality=95)
+                        bg.save(part, "JPEG", quality=95)
                     else:
-                        img.convert("RGB").save(target_path, "JPEG", quality=95)
+                        img.convert("RGB").save(part, "JPEG", quality=95)
                 elif ext == "png":
-                    img.save(target_path, "PNG")
-                elif ext == "webp":
-                    img.save(target_path, "WEBP", quality=95)
+                    img.save(part, "PNG")
                 else:
-                    target_path.write_bytes(content)
-            return target_path.exists() and target_path.stat().st_size > 0
+                    img.save(part, "WEBP", quality=95)
+            if part.exists() and part.stat().st_size > 0:
+                os.replace(part, target_path)
+                return True
+            self._discard(part)
+            return False
         except Exception:
+            self._discard(part)
             return False
 
     def _detect_image_format(self, content: bytes) -> str:
@@ -249,8 +319,7 @@ class AlbumDownloader:
         if self.image_format == "auto":
             if self._is_image_animated(content):
                 target_path = Path(self.download_path) / f"{stem}{actual_ext}"
-                target_path.parent.mkdir(parents=True, exist_ok=True)
-                target_path.write_bytes(content)
+                self._save_bytes(target_path, content)
                 self.live_manager.update_log(
                     "Animated image",
                     f"Preserved original animation for {target_path.name}",
@@ -260,8 +329,7 @@ class AlbumDownloader:
             target_path = Path(self.download_path) / f"{stem}.jpg"
         elif self.image_format in ("original", "native", ""):
             target_path = Path(self.download_path) / f"{stem}{actual_ext}"
-            target_path.parent.mkdir(parents=True, exist_ok=True)
-            target_path.write_bytes(content)
+            self._save_bytes(target_path, content)
             return
         else:
             # Explicit format chosen by user (force conversion)
@@ -282,7 +350,7 @@ class AlbumDownloader:
         # (Compare true actual format with requested format, NOT the URL file extension!)
         target_fmt = "jpeg" if ext in ("jpg", "jpeg") else ext
         if actual_fmt == target_fmt or (target_fmt == "jpeg" and actual_fmt in ("jpeg", "jpg")):
-            target_path.write_bytes(content)
+            self._save_bytes(target_path, content)
             return
 
         # 1. Try ImageMagick if installed
@@ -299,11 +367,26 @@ class AlbumDownloader:
             f"Failed to convert {original_filename} to {ext} with ImageMagick/Pillow. Saving as {stem}{actual_ext}.",
         )
         fallback_path = Path(self.download_path) / f"{stem}{actual_ext}"
-        fallback_path.parent.mkdir(parents=True, exist_ok=True)
-        fallback_path.write_bytes(content)
+        self._save_bytes(fallback_path, content)
 
     def download_album(self) -> list[str]:
         """Download all images from the album while tracking progress."""
+        # An album already packed into a complete CBZ is done: nothing to download again
+        existing_cbz = self._find_complete_cbz()
+        if existing_cbz is not None:
+            if hasattr(self.live_manager, "start_album"):
+                self.live_manager.start_album(
+                    album_title=self.clean_album_name or self.album_name,
+                    total_images=self.total_images,
+                )
+            self.live_manager.update_log(
+                "Already archived",
+                f"Album already packed in \"{existing_cbz.name}\": skipped.",
+            )
+            if hasattr(self.live_manager, "update_album_progress"):
+                self.live_manager.update_album_progress(self.total_images, self.total_images)
+            return []
+
         album_pages_soups = self.crawler.collect_album_pages_soups()
         num_pages = len(album_pages_soups)
         total_failed_downloads: list[str] = []
@@ -322,7 +405,8 @@ class AlbumDownloader:
                 self.total_images = max_idx
                 self.index_width = max(2, len(str(self.total_images)))
 
-        # Snapshot existing files once (avoids listing the folder for every page)
+        # Drop truncated leftovers of an interrupted run, then snapshot existing files once
+        self._clean_stale_parts()
         self._local_index = self._scan_local_pages()
 
         if hasattr(self.live_manager, "start_album"):
@@ -383,10 +467,13 @@ class AlbumDownloader:
                 )
 
         if not total_failed_downloads:
-            # Rename while still in the temp folder, then move the finished album to Downloads
-            if self.rename_sequential:
-                self._rename_sequential()
-            self._finalize_successful_download()
+            # CBZ mode: pack the images straight into Downloads/<title>.cbz, no album folder.
+            # If the archive cannot be made, fall back to the normal folder so nothing is lost.
+            if not (self.create_cbz and self._create_cbz()):
+                # Rename while still in the temp folder, then move the finished album to Downloads
+                if self.rename_sequential:
+                    self._rename_sequential()
+                self._finalize_successful_download()
             if hasattr(self.live_manager, "update_album_progress"):
                 self.live_manager.update_album_progress(self.total_images, self.total_images)
 
@@ -428,6 +515,138 @@ class AlbumDownloader:
                 "Notice",
                 f"Completed successfully (folder: {self.download_path}); could not rename the folder: {err}",
             )
+
+    # ------------------------------------------------------------------ CBZ archive
+
+    def _cbz_path(self) -> Path:
+        """Return "Downloads/<full gallery title>.cbz" (shortened only if the path would be too long)."""
+        folder = Path(DOWNLOAD_FOLDER)
+        title = self.clean_album_name or self.album_name or "album"
+        # 255 chars is the file-name limit; on Windows also stay below the 260-char MAX_PATH
+        room = 255 - len(".cbz")
+        if os.name == "nt":
+            room = min(room, 259 - len(str(folder.resolve())) - 1 - len(".cbz"))
+        name = sanitize_directory_name(title, max_length=max(20, room)) or "album"
+        return folder / f"{name}.cbz"
+
+    @staticmethod
+    def _cbz_page_count(cbz: Path) -> int:
+        """Return how many images a CBZ holds (0 if it is missing or unreadable)."""
+        try:
+            with zipfile.ZipFile(cbz) as zf:
+                return sum(1 for n in zf.namelist() if Path(n).suffix.lower() in IMAGE_EXTS)
+        except (OSError, zipfile.BadZipFile):
+            return 0
+
+    def _find_complete_cbz(self) -> Path | None:
+        """Return the album's CBZ in Downloads if it exists and holds every page, else None.
+
+        Also recognizes archives made by earlier versions inside "Downloads/<album>/".
+        """
+        candidates = [self._cbz_path()]
+        old_folder = Path(DOWNLOAD_FOLDER) / sanitize_directory_name(self.clean_album_name)
+        if old_folder.is_dir():
+            candidates.extend(sorted(old_folder.glob("*.cbz")))
+        for cbz in candidates:
+            if not cbz.is_file():
+                continue
+            pages = self._cbz_page_count(cbz)
+            if pages > 0 and (self.total_images <= 0 or pages >= self.total_images):
+                return cbz
+        return None
+
+    def _comic_info_xml(self, page_count: int) -> str:
+        """Build a minimal ComicInfo.xml (read by most comic readers: title, page count, source)."""
+        from xml.sax.saxutils import escape
+
+        title = escape(self.clean_album_name or self.album_name or "")
+        return (
+            '<?xml version="1.0" encoding="utf-8"?>\n'
+            '<ComicInfo xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" '
+            'xmlns:xsd="http://www.w3.org/2001/XMLSchema">\n'
+            f"  <Title>{title}</Title>\n"
+            f"  <PageCount>{page_count}</PageCount>\n"
+            f"  <Web>{escape(self.url)}</Web>\n"
+            "</ComicInfo>\n"
+        )
+
+    def _create_cbz(self) -> bool:
+        """Pack the album images into "Downloads/<title>.cbz", then delete them and their folder.
+
+        Returns True when the archive was created; on False the images are left untouched.
+
+        Pages are stored as 01.ext..N.ext (padding sized on N) so every reader shows them in
+        order, whatever the names on disk. The archive is written to a ".part" file, verified,
+        and only then renamed; the images are removed only after a successful verification.
+        """
+        folder = Path(self.download_path)
+        index = self._scan_local_pages()
+        if not index:
+            self.live_manager.update_log("CBZ skipped", "No images found to archive.")
+            return False
+
+        pages = sorted(index)
+        duplicated = [i for i in pages if len(index[i]) > 1]
+        if duplicated:
+            self.live_manager.update_log(
+                "CBZ skipped",
+                f"Duplicate pages on disk ({duplicated[:10]}{'…' if len(duplicated) > 10 else ''}): "
+                "images left as they are.",
+            )
+            return False
+
+        width = max(2, len(str(max(self.total_images, pages[-1]))))
+        cbz_path = self._cbz_path()
+        cbz_path.parent.mkdir(parents=True, exist_ok=True)
+        part = self._part_path(cbz_path)
+        sources: list[Path] = []
+        try:
+            # Images are already compressed: ZIP_STORED is faster and is what readers expect
+            with zipfile.ZipFile(part, "w", compression=zipfile.ZIP_STORED) as zf:
+                for idx in pages:
+                    src = index[idx][0]
+                    ext = ".jpg" if src.suffix.lower() == ".jpeg" else src.suffix.lower()
+                    zf.write(src, arcname=f"{idx:0{width}d}{ext}")
+                    sources.append(src)
+                zf.writestr("ComicInfo.xml", self._comic_info_xml(len(pages)))
+
+            with zipfile.ZipFile(part) as zf:
+                bad = zf.testzip()
+                stored = sum(1 for n in zf.namelist() if Path(n).suffix.lower() in IMAGE_EXTS)
+            if bad is not None or stored != len(sources):
+                raise OSError(f"archive verification failed ({bad or f'{stored}/{len(sources)} pages'})")
+            os.replace(part, cbz_path)
+        except Exception as err:
+            self._discard(part)
+            self.live_manager.update_log(
+                "CBZ failed",
+                f"Could not create the CBZ archive ({err}): album saved as a normal folder.",
+            )
+            return False
+
+        not_removed = 0
+        for src in sources:
+            try:
+                src.unlink()
+            except OSError:
+                not_removed += 1
+        # Remove the now-empty album folder (temp/<album> or an old Downloads/<album>)
+        folder_note = ""
+        try:
+            leftovers = [f for f in folder.iterdir() if f.resolve() != cbz_path.resolve()]
+            if not leftovers:
+                folder.rmdir()
+            else:
+                folder_note = f"; folder kept ({len(leftovers)} other file(s) inside)"
+        except OSError:
+            pass
+        note = f" ({not_removed} image(s) could not be deleted)" if not_removed else ""
+        self.download_path = str(cbz_path.parent)
+        self.live_manager.update_log(
+            "CBZ",
+            f"Created \"{cbz_path}\" with {len(sources)} pages; extracted images removed{note}{folder_note}.",
+        )
+        return True
 
     def download_picture(
             self,

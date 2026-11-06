@@ -21,6 +21,7 @@ CHUNK_SIZE = 16 * KB  # The size of each chunk when downloading files.
 MAX_WORKERS = 5       # The number of concurrent image downloads.
 DEFAULT_IMAGE_FORMAT = "auto"  # CLI default. Options: "auto", "original", "jpg", "png", "webp"
 RENAME_SEQUENTIAL = True  # Rename images to 01..N (padding sized on N) when the album is complete.
+CREATE_CBZ = False        # Save each completed album as "Downloads/<title>.cbz" instead of a folder of images.
 IMAGE_SERVER_RETRIES = 3  # How many different image servers to try per page ("reload" link).
 IMAGE_FETCH_RETRIES = 3   # Attempts on the same image server before switching to another one.
 PAGE_FETCH_RETRIES = 3    # Attempts for gallery / picture HTML pages on transient errors.

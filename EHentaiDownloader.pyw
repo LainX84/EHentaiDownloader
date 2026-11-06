@@ -44,7 +44,7 @@ from tkinter import (
 import tkinter as tk
 import tkinter.ttk as ttk
 
-from src.config import AUTOSAVE_INTERVAL, DONE_LINE_REMOVE_DELAY, RENAME_SEQUENTIAL, SESSION_LOG
+from src.config import AUTOSAVE_INTERVAL, CREATE_CBZ, DONE_LINE_REMOVE_DELAY, RENAME_SEQUENTIAL, SESSION_LOG
 from src.file_utils import append_session_banner, append_session_log
 
 # ---------------------------------------------------------------------------
@@ -507,13 +507,16 @@ class EHentaiGUI(tk.Tk):
         self._rename_btn.pack(side="left", padx=(0, PAD*2))
         self._refresh_rename_btn()
 
-        self._open_downloads_btn = tk.Button(
-            hdr_right, text="📁  Open Downloads",
-            bg=PANEL, fg=ACCENT, font=FONT_SMALL,
+        # Pack each completed album into a .cbz (comic book archive) and delete the images
+        self._cbz_var = BooleanVar(value=CREATE_CBZ)
+        self._cbz_btn = tk.Button(
+            hdr_right,
+            bg=PANEL, font=FONT_SMALL,
             relief="flat", cursor="hand2",
-            command=self._open_downloads_folder,
+            command=self._toggle_cbz,
         )
-        self._open_downloads_btn.pack(side="right")
+        self._cbz_btn.pack(side="left", padx=(0, PAD*2))
+        self._refresh_cbz_btn()
 
         ttk.Separator(self, orient="horizontal").pack(side="top", fill="x")
 
@@ -543,6 +546,16 @@ class EHentaiGUI(tk.Tk):
         self._nb.add(self._tab_single, text="  🔗  Single Download  ")
         self._nb.add(self._tab_batch,  text="  📋  Batch Download   ")
         self._nb.add(self._tab_retry,  text="  🔄  Retry Failed     ")
+
+        # "Open Downloads" sits on the tab-bar row, right-aligned: always visible, whatever tab is open
+        self._open_downloads_btn = tk.Button(
+            self, text="📁  Open Downloads",
+            bg=ACCENT, fg="white", activebackground=ACCENT2, activeforeground="white",
+            font=FONT_SMALL, relief="flat", cursor="hand2", padx=10, pady=2,
+            command=self._open_downloads_folder,
+        )
+        self._open_downloads_btn.place(in_=self._nb, relx=1.0, x=-2, y=1, anchor="ne")
+        self._open_downloads_btn.lift()
 
         self._build_single_tab()
         self._build_batch_tab()
@@ -1021,7 +1034,7 @@ class EHentaiGUI(tk.Tk):
             tag = "ERROR"
         elif any(w in low for w in ("warn", "notice", "skip", "already present", "pause", "rate limit", "waiting", "limit")):
             tag = "WARNING"
-        elif any(w in low for w in ("success", "complete", "downloaded", "renamed", "ok")):
+        elif any(w in low for w in ("success", "complete", "downloaded", "renamed", "created", "ok")):
             tag = "ok"
         self._log_box.insert(END, f"{details}\n", tag)
         self._log_box.see(END)
@@ -1048,16 +1061,28 @@ class EHentaiGUI(tk.Tk):
         self._prev_format = new_format
 
     def _toggle_rename(self) -> None:
-        """Flip the 'Rename 01…N' option."""
+        """Flip the 'Auto Rename' option (rename images 01…N when an album is complete)."""
         self._rename_var.set(not self._rename_var.get())
         self._refresh_rename_btn()
 
     def _refresh_rename_btn(self) -> None:
-        """Update the 'Rename 01…N' button text and colour to match its state."""
+        """Update the 'Auto Rename' button text and colour to match its state."""
         if self._rename_var.get():
-            self._rename_btn.configure(text="🔢  Rename 01…N: ON", fg=ACCENT, activeforeground=ACCENT2)
+            self._rename_btn.configure(text="🔢  Auto Rename: ON", fg=ACCENT, activeforeground=ACCENT2)
         else:
-            self._rename_btn.configure(text="🔢  Rename 01…N: OFF", fg=MUTED, activeforeground=TEXT_SEC)
+            self._rename_btn.configure(text="🔢  Auto Rename: OFF", fg=MUTED, activeforeground=TEXT_SEC)
+
+    def _toggle_cbz(self) -> None:
+        """Flip the 'CBZ archive' option."""
+        self._cbz_var.set(not self._cbz_var.get())
+        self._refresh_cbz_btn()
+
+    def _refresh_cbz_btn(self) -> None:
+        """Update the 'CBZ archive' button text and colour to match its state."""
+        if self._cbz_var.get():
+            self._cbz_btn.configure(text="📚  CBZ archive: ON", fg=ACCENT, activeforeground=ACCENT2)
+        else:
+            self._cbz_btn.configure(text="📚  CBZ archive: OFF", fg=MUTED, activeforeground=TEXT_SEC)
 
     def _get_selected_format(self) -> str:
         """Map the combobox label to the internal format name (auto / original / jpg / png / webp)."""
@@ -1174,6 +1199,7 @@ class EHentaiGUI(tk.Tk):
         self._format_cb.configure(state="readonly" if state == "normal" else "disabled")
         # The rename option is read when a download starts: lock it while one is running
         self._rename_btn.configure(state=state)
+        self._cbz_btn.configure(state=state)
 
     def _clear_log(self) -> None:
         """Empty the log box (session.log is not touched)."""
@@ -1475,7 +1501,7 @@ class EHentaiGUI(tk.Tk):
         self._bar2_lbl.configure(text="Page Download:")
         self._status_var.set(f"Download [{fmt}]: {url}")
         threading.Thread(
-            target=self._run_single, args=(url, fmt, self._rename_var.get()), daemon=True,
+            target=self._run_single, args=(url, fmt, self._rename_var.get(), self._cbz_var.get()), daemon=True,
         ).start()
 
     def _start_batch(self) -> None:
@@ -1524,7 +1550,7 @@ class EHentaiGUI(tk.Tk):
                          f"{to_check} link(s) not verified yet: checking them in parallel with the download."))
             threading.Thread(target=self._run_batch_verify, daemon=True).start()
         threading.Thread(
-            target=self._run_batch, args=(fmt, self._rename_var.get()), daemon=True,
+            target=self._run_batch, args=(fmt, self._rename_var.get(), self._cbz_var.get()), daemon=True,
         ).start()
 
     def _clear_batch_marks(self) -> None:
@@ -1729,7 +1755,9 @@ class EHentaiGUI(tk.Tk):
         self._retry_list.tag_remove("fail_batch_line", "1.0", END)
         self._retry_list.configure(state="disabled")
         self._status_var.set(f"Retrying [{fmt}] {len(urls)} failed URL(s)…")
-        threading.Thread(target=self._run_retry, args=(fmt, self._rename_var.get()), daemon=True).start()
+        threading.Thread(
+            target=self._run_retry, args=(fmt, self._rename_var.get(), self._cbz_var.get()), daemon=True,
+        ).start()
 
     def _begin_download(self, editor_editable: bool = False) -> None:
         """Reset progress bars and log, and lock the controls."""
@@ -1743,7 +1771,9 @@ class EHentaiGUI(tk.Tk):
 
     # ------------------------------------------------------------------ background workers
 
-    def _run_single(self, url: str, image_format: str = "original", rename: bool = RENAME_SEQUENTIAL) -> None:
+    def _run_single(
+        self, url: str, image_format: str = "original", rename: bool = RENAME_SEQUENTIAL, cbz: bool = CREATE_CBZ,
+    ) -> None:
         """Worker thread: download one album and report the result to the GUI."""
         success = False
         failed_by_url: dict[str, list[str]] = {}
@@ -1751,7 +1781,9 @@ class EHentaiGUI(tk.Tk):
         try:
             from downloader import download_album
             lm = GUILiveManager(log_queue=self._q, mode="single")
-            ok, failed_items = download_album(url, lm, image_format=image_format, rename_sequential=rename)
+            ok, failed_items = download_album(
+                url, lm, image_format=image_format, rename_sequential=rename, create_cbz=cbz,
+            )
             success = ok
             if failed_items or not ok:
                 failed_by_url[url] = failed_items
@@ -1783,7 +1815,7 @@ class EHentaiGUI(tk.Tk):
                 self._batch_accepting = False
                 return None
 
-    def _run_batch(self, image_format: str = "original", rename: bool = RENAME_SEQUENTIAL) -> None:
+    def _run_batch(self, image_format: str = "original", rename: bool = RENAME_SEQUENTIAL, cbz: bool = CREATE_CBZ) -> None:
         """Worker thread: download the batch list one album after another.
 
         Tasks come from a live queue filled by the GUI thread, so links added at the bottom
@@ -1825,7 +1857,7 @@ class EHentaiGUI(tk.Tk):
                         batch_total=total_items,
                     )
                     ok, failed_items = download_album(
-                        url, lm, image_format=image_format, rename_sequential=rename, name_hint=name,
+                        url, lm, image_format=image_format, rename_sequential=rename, name_hint=name, create_cbz=cbz,
                     )
                     # Rewrite the line as "STATUS | IMAGES | TITLE | LINK" with what is now known
                     self._q.put(("TASK_ANNOTATE", task_id, format_url_line(url)))
@@ -1933,7 +1965,7 @@ class EHentaiGUI(tk.Tk):
         finally:
             self._q.put(("VERIFY_DONE", ok_count, bad_count, domains))
 
-    def _run_retry(self, image_format: str = "original", rename: bool = RENAME_SEQUENTIAL) -> None:
+    def _run_retry(self, image_format: str = "original", rename: bool = RENAME_SEQUENTIAL, cbz: bool = CREATE_CBZ) -> None:
         """Worker thread: retry every album of the failed queue and keep only those still failing."""
         success = True
         failed_by_url: dict[str, list[str]] = {}
@@ -1959,7 +1991,7 @@ class EHentaiGUI(tk.Tk):
                 )
                 ok, failed_items = download_album(
                     url, lm, image_format=image_format, rename_sequential=rename,
-                    name_hint=gallery_name(url),
+                    name_hint=gallery_name(url), create_cbz=cbz,
                 )
                 if not ok or failed_items:
                     remaining.append(url)
