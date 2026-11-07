@@ -13,6 +13,7 @@ from urllib.parse import urlparse
 
 from requests.exceptions import ConnectTimeout, HTTPError, RequestException, Timeout
 
+from src import throttle
 from src.config import (
     CHUNK_SIZE,
     CONNECTION_TIMEOUT,
@@ -56,6 +57,7 @@ def _fetch_with_retries_single(
 ) -> Response | None:
     """Perform single-domain retries with exponential backoff and chunk streaming."""
     for attempt in range(retries):
+        throttle.wait_while_paused()  # user pressed Pause: don't start new image requests
         try:
             response = session.get(url, timeout=CONNECTION_TIMEOUT, headers=headers, stream=True)
             response.raise_for_status()

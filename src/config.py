@@ -19,7 +19,8 @@ SETTINGS_FILE = "settings.json"  # GUI choices remembered between runs (format, 
 # ============================
 KB = 1024             # Number of bytes in a kilobyte.
 CHUNK_SIZE = 16 * KB  # The size of each chunk when downloading files.
-MAX_WORKERS = 5       # The number of concurrent image downloads.
+MAX_WORKERS = 5       # Upper limit of concurrent image downloads (the speed level picks 1..5).
+DEFAULT_SPEED = 3     # Start speed: 1 Very slow, 2 Slow, 3 Normal, 4 Fast, 5 Very fast (GUI slider).
 DEFAULT_IMAGE_FORMAT = "auto"  # CLI default. Options: "auto", "original", "jpg", "png", "webp"
 RENAME_SEQUENTIAL = True  # Rename images to 01..N (padding sized on N) when the album is complete.
 CREATE_CBZ = False        # Save each completed album as "Downloads/<title>.cbz" instead of a folder of images.
@@ -42,6 +43,9 @@ HTTP_RATE_LIMIT = 429  # "Too Many Requests"
 
 CONNECTION_TIMEOUT = 30        # Timeout duration for network requests (in seconds).
 RATE_LIMIT_SLEEPING_TIME = 60  # Time to wait when rate-limited (in seconds).
+BAN_EXTRA_WAIT = (30, 45)      # Extra seconds (random) waited after a temporary IP ban expires.
+BAN_DEFAULT_WAIT = 300         # Wait used when the ban page does not say how long the ban lasts.
+MAX_BAN_WAITS = 10             # Bans in a row tolerated on the same page before giving up on it.
 
 # ============================
 # Session log rotation

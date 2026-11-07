@@ -23,7 +23,8 @@
   - Network errors, timeouts and HTTP 429/5xx are retried with increasing waits.
   - If an image server is broken, another one is requested through the gallery's "reload" link.
   - The 509 "image quota exceeded" placeholder is detected: it is never saved as a page, and the album is queued for retry.
-- ⚡ **Parallel downloads** with a thread pool and short courtesy pauses to avoid rate limits.
+- ⚡ **Parallel downloads** with an adjustable **speed** (GUI slider, 1 Very slow … 5 Very fast): it sets the pause between page requests, shared by all threads, and how many images download at once. One page request per image (the "reload" link is used only when an image server fails).
+- ⏸ **IP-ban pause**: when E-Hentai answers *"This IP address has been temporarily banned … The ban expires in X minutes and Y seconds"*, the ban time is read from the page and every download pauses for that long plus 30–45 s, then resumes the same album (it never skips to the next one). The status bar shows a countdown; after switching IP (e.g. with a VPN) press **Resume now**.
 - ♻️ **Resume**: images already on disk (also from earlier runs or renamed files) are skipped. Every image is first written to a `.part` temp file and renamed only when complete, so an interrupted run can never leave a truncated image that looks finished (leftover `.part` files are deleted on the next run).
 - 📋 **Batch mode** from `URLs.txt` and 🔄 **retry queue** in `failed_downloads.txt`.
 - 🔍 **Link check before downloading**: malformed links (e.g. a token missing a character) are reported before starting; *Verify Links* also checks every gallery online and shows its title, size and the site it will be downloaded from (e-hentai.org or exhentai.org).
@@ -88,7 +89,11 @@ python EHentaiDownloader.pyw
 | **Image Format** | Output format for all downloads (see the table below). |
 | **Auto Rename** | ON/OFF: rename images `01…N` when an album is complete. |
 | **CBZ archive** | ON/OFF: save each completed album as `Downloads/<gallery title>.cbz` instead of a folder of images. |
-| *Remembered settings* | Image Format, Auto Rename and CBZ archive are saved in `settings.json` as soon as you change them and restored at the next start (delete the file to go back to the `src/config.py` defaults). |
+| **Speed** slider | Bottom right: 1 Very slow … 5 Very fast (default 3 Normal). Lower it if you get temporary IP bans. The request pace changes at once, the number of parallel downloads from the next album. |
+| **Pause / Resume** | Next to *Start Batch*, active while a download runs: no new request starts (images already being received finish), freeing the bandwidth. On pause `URLs.txt` is saved and the album in progress stays in `temp/`, so you can also close the program (no confirmation asked) or shut down the PC: the next *Start Batch* resumes from that album, skipping the pages already on disk. |
+| **When done** | Bottom right: *Do nothing*, *Close program* or *Shut down PC* when all downloads are finished (handy for a list left running overnight). A 60 s countdown lets you cancel; the list and settings are saved first. You can change it while a download runs. It always starts as *Do nothing* (never remembered, so the PC is not switched off by surprise next time). |
+| **Resume now** | Appears in the status bar during a temporary IP ban: stop waiting after you changed IP (VPN). If the ban is still active the pause simply starts again. |
+| *Remembered settings* | Image Format, Auto Rename, CBZ archive and Speed are saved in `settings.json` as soon as you change them and restored at the next start (delete the file to go back to the `src/config.py` defaults). |
 | **Open Downloads** | Button on the right of the tab bar (always visible): opens the `Downloads` folder. |
 | **Single Download** tab | Paste one gallery URL and press *Start Download*. |
 | **Batch Download** tab | Editor for `URLs.txt`: one URL per line, lines starting with `#` are skipped. *Start Batch* first checks for duplicates and malformed links. The list is saved automatically every few seconds; while the batch runs you can keep adding links at the bottom and they are queued too. Links never verified are checked online in parallel with the download (unreadable ones are skipped and go to *Retry Failed*). Downloaded lines turn green and disappear after ~45 s; *Clear All* asks for confirmation. |
@@ -156,7 +161,8 @@ All settings are in [`src/config.py`](src/config.py):
 | `TEMP_FOLDER` | `temp` | Albums are downloaded here and moved to `DOWNLOAD_FOLDER` only when complete (incomplete ones stay here and are resumed by *Retry Failed*). |
 | `AUTOSAVE_INTERVAL` | `10` | Seconds between automatic saves of the batch list to `URLs.txt`. |
 | `DONE_LINE_REMOVE_DELAY` | `45` | Seconds a downloaded (green) line stays in the batch list before being removed. |
-| `MAX_WORKERS` | `5` | Images downloaded in parallel. |
+| `MAX_WORKERS` | `5` | Upper limit of images downloaded in parallel (the speed level picks 1…5). |
+| `DEFAULT_SPEED` | `3` | Speed level on first start and for the CLI: 1 Very slow (4 s between page requests, 1 download), 2 Slow (2.5 s, 2), 3 Normal (1.5 s, 3), 4 Fast (0.8 s, 4), 5 Very fast (0.3 s, 5). |
 | `DEFAULT_IMAGE_FORMAT` | `auto` | Format used by the command-line scripts. |
 | `RENAME_SEQUENTIAL` | `True` | Rename images `01…N` when an album is complete (initial state of the GUI button on first start). |
 | `CREATE_CBZ` | `False` | Save each completed album as `Downloads/<gallery title>.cbz` instead of a folder (initial state of the GUI button on first start; also used by the CLI). |
@@ -166,6 +172,9 @@ All settings are in [`src/config.py`](src/config.py):
 | `ALBUM_PAGE_DELAY` | `(0.5, 1.5)` | Random pause (seconds) between gallery pages. |
 | `CONNECTION_TIMEOUT` | `30` | Network timeout in seconds. |
 | `RATE_LIMIT_SLEEPING_TIME` | `60` | Wait in seconds after a rate-limit response. |
+| `BAN_EXTRA_WAIT` | `(30, 45)` | Extra random seconds waited after a temporary IP ban expires. |
+| `BAN_DEFAULT_WAIT` | `300` | Wait used when the ban page does not say how long the ban lasts. |
+| `MAX_BAN_WAITS` | `10` | Bans in a row on the same page before giving up on it. |
 | `SESSION_LOG_MAX_BYTES` / `SESSION_LOG_BACKUPS` | `5 MB` / `3` | Log rotation size and number of old logs kept. |
 | `USER_AGENT` | Firefox | Browser identity sent with every request. |
 
@@ -187,7 +196,7 @@ All settings are in [`src/config.py`](src/config.py):
 | :--- | :--- |
 | `Image limit … 509` | Your E-Hentai image quota is exhausted. Wait (or reset it from your account), then use *Retry Failed*. |
 | `cookies rejected … igneous=mystery` / `Sad Panda` | ExHentai cookies missing, expired or wrong: update `cookies.json`. |
-| `IP restricted or temporarily banned` | Too many requests: wait before trying again, and consider lowering `MAX_WORKERS`. |
+| `IP temporarily banned by E-Hentai … Downloads paused` | Too many requests. Nothing to do: downloads resume by themselves when the ban ends (+30–45 s). Lower the **Speed** slider to avoid it, or switch IP with a VPN and press **Resume now**. |
 | `CBZ failed` / `CBZ skipped` | The archive could not be written or verified (or pages were duplicated): the album is saved as a normal folder instead, nothing is lost. |
 | `Rename skipped` | Some pages were missing or duplicated on disk, so images were left with their download names. |
 | `Invalid gallery URL … token` / `Key missing, or incorrect key provided` | The link is incomplete or mistyped: copy it again from the browser. |
@@ -211,6 +220,7 @@ EHentaiDownloader/
     ├── config.py            # All settings
     ├── file_utils.py        # Files, folder names, session log + rotation
     ├── general_utils.py     # HTTP session, cookies, page fetching with retries & diagnostics
+    ├── throttle.py          # Speed levels (request pacing) and temporary IP-ban pause
     ├── crawler/
     │   ├── crawler.py       # Gallery parsing: title, image count, page list
     │   └── crawler_utils.py # Link helpers ("reload" token, picture pages)

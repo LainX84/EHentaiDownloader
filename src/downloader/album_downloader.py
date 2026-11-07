@@ -28,6 +28,7 @@ from src.config import (
     RENAME_SEQUENTIAL,
     TEMP_FOLDER,
 )
+from src import throttle
 from src.crawler.crawler import Crawler
 from src.crawler.crawler_utils import extract_nl_value, get_picture_pages
 from src.file_utils import (
@@ -894,27 +895,18 @@ class AlbumDownloader:
                 _mark_done()
                 return
 
-            # 1. Fetch the picture page to extract the 'nl' value
-            reloaded_page = self.crawler.get_reloaded_page(
-                picture_page,
-                referer=self.url,
-            )
-            if not reloaded_page:
-                with failed_lock:
-                    failed_downloads.append(picture_page)
-                _mark_done()
-                return
-
-            # 2+3. Get the image link and download it; if the image server fails,
-            #      use the page's "reload" token to get a different server and retry.
+            # 1+2. Fetch the picture page, take the image link and download it. Only if the
+            #      image server fails, use the page's "reload" (nl) token to get another
+            #      server and retry: one page request per image instead of two.
             response = None
             download_link = ""
+            reloaded_page = picture_page
             for server_attempt in range(1, IMAGE_SERVER_RETRIES + 1):
                 try:
                     soup = fetch_page(
                         reloaded_page,
                         session=self.session,
-                        referer=picture_page,
+                        referer=self.url if server_attempt == 1 else picture_page,
                     )
                     download_link_container = soup.find("img", {"id": "img", "src": True})
                     if not download_link_container:
@@ -1014,7 +1006,12 @@ class AlbumDownloader:
             time.sleep(random.uniform(1.0, 3.0))  # noqa: S311
 
         future_to_page: dict = {}
-        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        workers = max(1, min(MAX_WORKERS, throttle.current_workers()))
+        self.live_manager.update_log(
+            "Speed",
+            f"Speed: {throttle.speed_name()} ({workers} parallel download(s)).",
+        )
+        with ThreadPoolExecutor(max_workers=workers) as executor:
             for picture_page in picture_pages:
                 future = executor.submit(download_worker, picture_page)
                 future_to_page[future] = picture_page

@@ -48,11 +48,13 @@ import tkinter.ttk as ttk
 from src.config import (
     AUTOSAVE_INTERVAL,
     CREATE_CBZ,
+    DEFAULT_SPEED,
     DONE_LINE_REMOVE_DELAY,
     RENAME_SEQUENTIAL,
     SESSION_LOG,
     SETTINGS_FILE,
 )
+from src import throttle
 from src.file_utils import append_session_banner, append_session_log
 
 # ---------------------------------------------------------------------------
@@ -78,6 +80,14 @@ FONT_HEAD  = ("Segoe UI",  11, "bold")
 FONT_BTN   = ("Segoe UI",  10, "bold")
 
 PAD = 12
+
+# "When done" choices (status bar). Never remembered between runs: a forgotten
+# "Shut down PC" must not switch the computer off at the next, unrelated download.
+WHEN_DONE_NOTHING = "Do nothing"
+WHEN_DONE_CLOSE = "Close program"
+WHEN_DONE_SHUTDOWN = "Shut down PC"
+WHEN_DONE_OPTIONS = (WHEN_DONE_NOTHING, WHEN_DONE_CLOSE, WHEN_DONE_SHUTDOWN)
+WHEN_DONE_COUNTDOWN = 60  # seconds to cancel before closing / shutting down
 
 
 # ---------------------------------------------------------------------------
@@ -372,6 +382,15 @@ class EHentaiGUI(tk.Tk):
         # GUI choices saved at the last run (format, Auto Rename, CBZ archive)
         self._settings = self._load_settings()
 
+        # Download speed (slider) and temporary IP-ban pause, shared with the worker threads
+        try:
+            throttle.set_speed(int(self._settings.get("speed", DEFAULT_SPEED)))
+        except (TypeError, ValueError):
+            throttle.set_speed(DEFAULT_SPEED)
+        self._ban_until = 0.0        # monotonic end of the current ban (0 = not banned)
+        self._ban_tick_job = None
+        throttle.add_ban_listener(lambda until: self._q.put(("BAN", until)))
+
         self._setup_styles()
         self._build_ui()
         self._install_logging()
@@ -537,10 +556,47 @@ class EHentaiGUI(tk.Tk):
         ttk.Separator(self, orient="horizontal").pack(side="bottom", fill="x")
         sb = tk.Frame(self, bg=BG)
         sb.pack(side="bottom", fill="x")
+        # What to do when all downloads are finished (far right, like HandBrake)
+        done_box = tk.Frame(sb, bg=BG)
+        done_box.pack(side="right", padx=(0, PAD))
+        tk.Label(done_box, text="When done:", bg=BG, fg=TEXT_SEC, font=FONT_SMALL).pack(side="left")
+        self._when_done_var = StringVar(value=WHEN_DONE_NOTHING)
+        self._when_done_cb = ttk.Combobox(
+            done_box, textvariable=self._when_done_var, values=WHEN_DONE_OPTIONS,
+            state="readonly", width=14, font=FONT_SMALL,
+        )
+        self._when_done_cb.pack(side="left", padx=(6, 0))
+        self._when_done_cb.bind("<<ComboboxSelected>>", self._on_when_done_changed)
+        self._when_done_dialog = None
+
+        # Speed slider (right side): fewer requests per second = less risk of an IP ban
+        speed_box = self._speed_box = tk.Frame(sb, bg=BG)
+        speed_box.pack(side="right", padx=PAD)
+        tk.Label(speed_box, text="Speed:", bg=BG, fg=TEXT_SEC, font=FONT_SMALL).pack(side="left")
+        self._speed_var = tk.IntVar(value=throttle.get_speed())
+        self._speed_scale = tk.Scale(
+            speed_box, from_=throttle.MIN_SPEED, to=throttle.MAX_SPEED, resolution=1,
+            orient="horizontal", showvalue=False, length=110, variable=self._speed_var,
+            bg=BG, highlightthickness=0, troughcolor=BORDER, activebackground=ACCENT2,
+            sliderlength=18, width=12, command=self._on_speed_changed,
+        )
+        self._speed_scale.pack(side="left", padx=(6, 6))
+        self._speed_lbl = tk.Label(speed_box, bg=BG, fg=TEXT, font=FONT_SMALL, width=16, anchor="w")
+        self._speed_lbl.pack(side="left")
+        self._refresh_speed_label()
+
+        # Shown only during an IP ban: skip the wait after switching IP (e.g. with a VPN)
+        self._resume_btn = tk.Button(
+            sb, text="▶  Resume now",
+            bg=WARNING, fg="white", activebackground=ERROR, activeforeground="white",
+            font=FONT_SMALL, relief="flat", cursor="hand2", padx=8, pady=0,
+            command=self._resume_after_ban,
+        )
+
+        # Status text last: the speed controls keep their space, a long message is cut
         self._status_var = StringVar(value="Ready.")
-        ttk.Label(sb, textvariable=self._status_var,
-                  style="Status.TLabel").pack(
-                      side="left", padx=PAD, pady=4)
+        self._status_lbl = ttk.Label(sb, textvariable=self._status_var, style="Status.TLabel")
+        self._status_lbl.pack(side="left", padx=PAD, pady=4)
 
         # ── Log area (pinned above status bar, expand=True) ─────────────────
         self._build_log_area()
@@ -710,7 +766,16 @@ class EHentaiGUI(tk.Tk):
         self._verify_btn.pack(side="left")
 
         self._batch_btn = _btn(btn_row, "▶  Start Batch", self._start_batch)
-        self._batch_btn.pack(side="right")
+        self._batch_btn.pack(side="right", before=self._reload_btn)  # main actions keep their space
+        # Pause / Resume: freezes every request; the list and the partial album stay saved,
+        # so the program can also be closed and the batch restarted later
+        self._pause_btn = _btn(btn_row, "⏸  Pause", self._toggle_pause, style="Ghost.TButton")
+        self._pause_btn.pack(side="right", padx=(0, 6), before=self._reload_btn)
+        self._pause_btn.configure(state="disabled")
+        # Seven buttons on one row: size them on their text so all fit in the default window
+        for child in btn_row.winfo_children():
+            if isinstance(child, ttk.Button) and child is not self._batch_btn:
+                child.configure(width=0)
 
     # ── Retry tab ────────────────────────────────────────────────────────────
 
@@ -1025,6 +1090,8 @@ class EHentaiGUI(tk.Tk):
                     self._on_download_done(success, failed)
                 elif msg_type == "STATUS":
                     self._status_var.set(msg[1])
+                elif msg_type == "BAN":
+                    self._on_ban_changed(msg[1])
         except queue.Empty:
             pass
         # While a batch runs, hand newly added lines to it (about twice a second)
@@ -1074,6 +1141,101 @@ class EHentaiGUI(tk.Tk):
         self._prev_format = new_format
         self._save_settings()
 
+    # ------------------------------------------------------------------ speed / IP ban
+
+    def _on_speed_changed(self, _value=None) -> None:
+        """Slider moved: apply the new speed at once (parallel downloads from the next album)."""
+        level = int(self._speed_var.get())
+        if level == throttle.get_speed():
+            return
+        throttle.set_speed(level)
+        self._refresh_speed_label()
+        self._save_settings()
+        if self._running:
+            self._append_log(
+                _ts(), "Speed",
+                f"Speed set to {throttle.speed_name(level)}: request pace changes now, "
+                "parallel downloads from the next album.",
+            )
+
+    def _refresh_speed_label(self) -> None:
+        """Show the speed name, in orange when it is risky for an IP ban."""
+        level = throttle.get_speed()
+        workers = throttle.SPEED_LEVELS[level][2]
+        self._speed_lbl.configure(
+            text=f"{throttle.speed_name(level)} ({workers}×)",
+            fg=WARNING if level >= 5 else TEXT,
+        )
+
+    def _on_ban_changed(self, until: float) -> None:
+        """A worker reported an IP ban (until > 0) or the ban was cleared (until == 0)."""
+        self._ban_until = until
+        if until > 0:
+            self._resume_btn.pack(side="right", padx=(0, PAD), before=self._status_lbl)
+            self._status_lbl.configure(foreground=WARNING)
+            if self._ban_tick_job is None:
+                self._ban_tick()
+        else:
+            self._end_ban_display("▶ Downloads resumed.")
+
+    def _ban_tick(self) -> None:
+        """Update the ban countdown in the status bar once per second."""
+        self._ban_tick_job = None
+        remaining = int(throttle.ban_remaining())
+        if throttle.is_paused() and remaining > 0:
+            self._ban_tick_job = self.after(1000, self._ban_tick)
+            return
+        if remaining <= 0:
+            self._end_ban_display("▶ Ban expired: downloads resumed.")
+            return
+        self._status_var.set(
+            f"⏸ IP banned by E-Hentai: paused, resuming in {remaining // 60}:{remaining % 60:02d} "
+            "(changed IP with a VPN? press Resume now)"
+        )
+        self._ban_tick_job = self.after(1000, self._ban_tick)
+
+    def _end_ban_display(self, message: str) -> None:
+        """Hide the ban countdown and the 'Resume now' button."""
+        if self._ban_tick_job is not None:
+            self.after_cancel(self._ban_tick_job)
+            self._ban_tick_job = None
+        self._ban_until = 0.0
+        self._resume_btn.pack_forget()
+        self._status_lbl.configure(foreground=TEXT_SEC)
+        if self._running:
+            self._status_var.set(message)
+
+    def _toggle_pause(self) -> None:
+        """Pause or resume the running download; on pause the batch list is saved to disk."""
+        if not self._running:
+            return
+        if not throttle.is_paused():
+            throttle.set_paused(True)
+            self._save_urls_txt(quiet=True)
+            append_session_banner("DOWNLOAD PAUSED BY THE USER")
+            self._pause_btn.configure(text="▶  Resume")
+            self._status_var.set(
+                "⏸ Paused: list and partial album saved. Press Resume, or close the program "
+                "and press Start Batch next time."
+            )
+            self._append_log(
+                _ts(), "Pause",
+                "Downloads paused (images already being received finish first). URLs.txt is "
+                "saved and the album in progress stays in temp/: you can close the program, "
+                "the next Start Batch resumes from this album skipping the pages already on disk.",
+            )
+        else:
+            throttle.set_paused(False)
+            append_session_banner("DOWNLOAD RESUMED BY THE USER")
+            self._pause_btn.configure(text="⏸  Pause")
+            self._status_var.set("▶ Downloads resumed.")
+            self._append_log(_ts(), "Resume", "Downloads resumed.")
+
+    def _resume_after_ban(self) -> None:
+        """'Resume now': stop waiting (useful after switching IP). If the ban is still on,
+        the next request detects it again and the pause restarts."""
+        throttle.clear_ban()
+
     # ------------------------------------------------------------------ remembered settings
 
     @staticmethod
@@ -1091,6 +1253,7 @@ class EHentaiGUI(tk.Tk):
             "image_format": self._format_var.get(),
             "auto_rename": bool(self._rename_var.get()),
             "cbz_archive": bool(self._cbz_var.get()),
+            "speed": int(self._speed_var.get()),
         }
         path = Path(SETTINGS_FILE)
         tmp = path.with_name(f"{path.name}.part")
@@ -1143,6 +1306,8 @@ class EHentaiGUI(tk.Tk):
         """Re-enable the UI and print a success or failure summary in the log."""
         self._running = False
         self._set_buttons_state("normal")
+        throttle.set_paused(False)
+        self._pause_btn.configure(state="disabled", text="⏸  Pause")
         if success:
             self._bar1["value"] = 100
             self._bar1_pct.configure(text="100%")
@@ -1226,6 +1391,121 @@ class EHentaiGUI(tk.Tk):
         self._log_box.see(END)
         self._log_box.configure(state="disabled")
 
+        if self._when_done_var.get() != WHEN_DONE_NOTHING:
+            self.after(500, self._start_when_done_countdown)
+
+    # ------------------------------------------------------------------ when done
+
+    def _on_when_done_changed(self, _event=None) -> None:
+        """Confirm the choice in the log."""
+        choice = self._when_done_var.get()
+        self._when_done_cb.selection_clear()
+        if choice == WHEN_DONE_NOTHING:
+            self._append_log(_ts(), "When done", "Nothing will happen when the downloads finish.")
+            return
+        when = "when the current downloads finish" if self._running else "when the next download finishes"
+        action = "The program will close" if choice == WHEN_DONE_CLOSE else "The PC will shut down"
+        self._append_log(
+            _ts(), "When done",
+            f"{action} {when} (you get {WHEN_DONE_COUNTDOWN} s to cancel).",
+        )
+
+    def _start_when_done_countdown(self) -> None:
+        """Show a cancellable countdown, then close the program or shut down the PC."""
+        if self._running or self._when_done_dialog is not None:
+            return  # a new download was started in the meantime
+        choice = self._when_done_var.get()
+        if choice == WHEN_DONE_NOTHING:
+            return
+        action = "Closing the program" if choice == WHEN_DONE_CLOSE else "Shutting down the PC"
+        append_session_banner(f"WHEN DONE: {choice.upper()} (countdown {WHEN_DONE_COUNTDOWN}s)")
+
+        dlg = tk.Toplevel(self)
+        self._when_done_dialog = dlg
+        dlg.title("Downloads finished")
+        dlg.configure(bg=PANEL)
+        dlg.resizable(False, False)
+        dlg.transient(self)
+        dlg.attributes("-topmost", True)
+        msg_var = StringVar()
+        tk.Label(dlg, textvariable=msg_var, bg=PANEL, fg=TEXT, font=FONT_UI,
+                 justify="left").pack(padx=PAD * 2, pady=(PAD * 2, PAD))
+        btns = tk.Frame(dlg, bg=PANEL)
+        btns.pack(padx=PAD * 2, pady=(0, PAD * 2), fill="x")
+        state = {"left": WHEN_DONE_COUNTDOWN, "job": None}
+
+        def close_dialog() -> None:
+            if state["job"] is not None:
+                self.after_cancel(state["job"])
+                state["job"] = None
+            self._when_done_dialog = None
+            dlg.destroy()
+
+        def cancel() -> None:
+            close_dialog()
+            append_session_banner("WHEN DONE: cancelled by the user")
+            self._append_log(_ts(), "When done", f"{action} cancelled.")
+            self._status_var.set(f"{action} cancelled.")
+
+        def do_it() -> None:
+            close_dialog()
+            self._execute_when_done(choice)
+
+        def tick() -> None:
+            if state["left"] <= 0:
+                do_it()
+                return
+            msg_var.set(
+                f"All downloads are finished.\n\n{action} in {state['left']} s…\n"
+                "The lists and settings are saved first."
+            )
+            state["left"] -= 1
+            state["job"] = self.after(1000, tick)
+
+        _btn(btns, "Cancel", cancel, style="Ghost.TButton").pack(side="right")
+        now_text = "Close now" if choice == WHEN_DONE_CLOSE else "Shut down now"
+        _btn(btns, now_text, do_it).pack(side="right", padx=(0, 6))
+        dlg.protocol("WM_DELETE_WINDOW", cancel)
+        tick()
+        dlg.update_idletasks()
+        x = self.winfo_rootx() + (self.winfo_width() - dlg.winfo_width()) // 2
+        y = self.winfo_rooty() + (self.winfo_height() - dlg.winfo_height()) // 3
+        dlg.geometry(f"+{max(0, x)}+{max(0, y)}")
+        dlg.lift()
+
+    def _save_state_for_exit(self) -> None:
+        """Save the batch list (downloaded lines removed now) and the settings."""
+        try:
+            self._flush_pending_removals()
+            self._save_urls_txt(quiet=True)
+            self._save_settings()
+        except Exception:
+            pass
+
+    def _execute_when_done(self, choice: str) -> None:
+        """Close the program, or shut down the PC and then close the program."""
+        self._save_state_for_exit()
+        if choice == WHEN_DONE_SHUTDOWN:
+            if os.name == "nt":
+                cmd = ["shutdown", "/s", "/t", "0"]
+            elif sys.platform == "darwin":
+                cmd = ["osascript", "-e", 'tell application "System Events" to shut down']
+            else:
+                cmd = ["systemctl", "poweroff"]
+            try:
+                flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                subprocess.run(cmd, check=True, creationflags=flags, timeout=30)  # noqa: S603
+            except (OSError, subprocess.SubprocessError) as err:
+                append_session_banner(f"WHEN DONE: shutdown failed ({err})")
+                self._append_log(_ts(), "ERROR", f"Could not shut down the PC: {err}")
+                self._status_var.set("⚠ Could not shut down the PC (see the log).")
+                return
+            append_session_banner("APPLICATION CLOSED (PC shutting down after the downloads)")
+        else:
+            append_session_banner("APPLICATION CLOSED (downloads finished)")
+        self._closed = True
+        self.destroy()
+
     def _set_buttons_state(self, state: str, editor_editable: bool = False) -> None:
         """Enable or disable every control that must not change during a download.
 
@@ -1277,7 +1557,9 @@ class EHentaiGUI(tk.Tk):
 
     def _on_window_close(self) -> None:
         """Handler called when user closes the GUI window."""
-        if self._running:
+        if self._running and throttle.is_paused():
+            append_session_banner("APPLICATION CLOSED (download paused, list saved)")
+        elif self._running:
             if not messagebox.askyesno(
                 "Close Application",
                 "A download is in progress. Do you really want to stop it and close the program?",
@@ -1287,12 +1569,7 @@ class EHentaiGUI(tk.Tk):
         else:
             append_session_banner("APPLICATION CLOSED")
         # Keep the list on disk: downloaded lines go away now, everything else is saved
-        try:
-            self._flush_pending_removals()
-            self._save_urls_txt(quiet=True)
-            self._save_settings()
-        except Exception:
-            pass
+        self._save_state_for_exit()
         self._closed = True
         self.destroy()
 
@@ -1806,6 +2083,8 @@ class EHentaiGUI(tk.Tk):
         """Reset progress bars and log, and lock the controls."""
         self._running = True
         self._set_buttons_state("disabled", editor_editable=editor_editable)
+        throttle.set_paused(False)
+        self._pause_btn.configure(state="normal", text="⏸  Pause")
         self._clear_log()
         self._bar1["value"] = 0
         self._bar1_pct.configure(text="0%")

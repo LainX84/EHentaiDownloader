@@ -17,8 +17,10 @@ from urllib.parse import urlparse
 import requests
 from bs4 import BeautifulSoup
 
+from src import throttle
 from src.config import (
     CONNECTION_TIMEOUT,
+    MAX_BAN_WAITS,
     PAGE_FETCH_RETRIES,
     RATE_LIMIT_SLEEPING_TIME,
     prepare_user_agent,
@@ -137,7 +139,7 @@ def _classify_page_problem(
             f"HTTP {status_code}."
         )
 
-    if "temporarily banned" in lowered_body or "ip address has been" in lowered_body:
+    if "temporarily banned" in lowered_html or "ip address has been temporarily" in lowered_html:
         return (
             "Reason: IP restricted or temporarily banned by E-Hentai. "
             f"HTTP {status_code}. Page title: {page_title or 'N/A'}. Snippet: {snippet}"
@@ -337,11 +339,17 @@ def fetch_page(
     # What each domain answered on the last attempt, shown together in the final error
     diagnoses_by_domain: dict[str, str] = {}
 
-    for attempt in range(max(1, retries)):
+    attempt = 0
+    bans = 0
+    while True:
         transient = False
         rate_limited = False
+        banned = False
 
         for attempt_idx, current_url in enumerate(urls_to_try):
+            # Global pacing: wait out an IP ban, then respect the speed level
+            throttle.wait_while_banned()
+            throttle.wait_turn()
             current_referer = referer
             if current_referer and attempt_idx > 0 and alt_url:
                 alt_ref = get_alternate_domain_url(current_referer)
@@ -363,6 +371,16 @@ def fetch_page(
                     response_headers=response.headers,
                     soup=soup,
                 )
+
+                # Temporary IP ban: pause everything until it expires, then retry this page.
+                # The other domain is not tried: the ban is on the IP, it would only extend it.
+                ban_seconds = throttle.ban_seconds_from_page(response.text)
+                if ban_seconds is not None:
+                    last_diagnosis = diagnosis or "Reason: IP temporarily banned by E-Hentai."
+                    diagnoses_by_domain[urlparse(current_url).netloc] = last_diagnosis
+                    throttle.report_ban(ban_seconds)
+                    banned = True
+                    break
 
                 if response.status_code == 200 and not diagnosis and soup:
                     if attempt_idx > 0:
@@ -409,7 +427,13 @@ def fetch_page(
                         f"Request error for {current_url} ({req_err}). Trying alternate domain: {urls_to_try[attempt_idx + 1]}"
                     )
 
-        if not transient or attempt >= retries - 1:
+        if banned:
+            bans += 1
+            if bans <= MAX_BAN_WAITS:
+                continue  # the next pass waits for the ban to end (wait_while_banned)
+            break
+
+        if not transient or attempt >= max(1, retries) - 1:
             break
 
         delay = RATE_LIMIT_SLEEPING_TIME if rate_limited else 2 ** (attempt + 1) + random.uniform(0.5, 1.5)  # noqa: S311
@@ -417,6 +441,7 @@ def fetch_page(
             f"Temporary error on {url} ({last_diagnosis}). Retry {attempt + 2}/{retries} in {delay:.0f}s..."
         )
         time.sleep(delay)
+        attempt += 1
 
     if len(diagnoses_by_domain) > 1:
         details = " | ".join(f"{domain} → {diag}" for domain, diag in diagnoses_by_domain.items())
