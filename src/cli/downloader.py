@@ -5,10 +5,12 @@ progress and logging events. It initializes necessary managers for live updates 
 handles command-line execution.
 
 Usage:
-    python downloader.py <album_url>
+    python -m src.cli.downloader <album_url>
 """
 
 from __future__ import annotations
+
+import os
 
 import logging
 import random
@@ -18,8 +20,11 @@ import time
 from pathlib import Path
 from urllib.parse import urlparse
 
+from src import nhentai
 from src.downloader.album_downloader import AlbumDownloader
+from src.downloader.nhentai_downloader import NHentaiAlbumDownloader
 from src.config import DEFAULT_IMAGE_FORMAT, FAILED_URLS_FILE
+from src.cli import PROJECT_ROOT
 from src.file_utils import append_session_banner, read_file, write_file
 from src.general_utils import clear_terminal, create_session, fetch_page, validate_gallery_url
 from src.managers.live_manager import LiveManager
@@ -32,6 +37,8 @@ def _normalize_album_url(url: str) -> str:
     url = url.strip()
     if not url:
         return ""
+    if nhentai.gallery_id(url):
+        return nhentai.canonical_url(url)  # also turns a reader link /g/<id>/7/ into the gallery
     try:
         parsed = urlparse(url)
         if parsed.scheme and parsed.netloc and "/g/" in parsed.path:
@@ -47,7 +54,11 @@ def _album_key(url: str) -> str | None:
 
     The id alone identifies a gallery, so the same album is recognised even if one copy
     of the link has a mistyped or truncated token, or uses the other domain.
+    nhentai galleries get an "nh" prefix ('nh694850'): their ids are a different series.
     """
+    nh_id = nhentai.gallery_id(url)
+    if nh_id:
+        return f"nh{nh_id}"
     try:
         parsed = urlparse(url)
         parts = [p for p in parsed.path.split("/") if p]
@@ -166,10 +177,12 @@ def short_problem(error_text: str) -> str:
     text = (error_text or "").lower()
     if "invalid gallery url" in text or "key missing" in text or "incomplete link" in text:
         return "invalid link"
-    if "removed" in text or "unavailable" in text:
+    if "removed" in text or "unavailable" in text or "does not exist" in text:
         return "gallery removed or unavailable"
     if "banned" in text:
         return "IP temporarily banned"
+    if "cloudflare" in text:
+        return "nhentai browser check (cf_clearance cookie)"
     if "cookie" in text or "exhentai access" in text or "sad panda" in text:
         return "ExHentai access denied (cookies)"
     if "rate limit" in text:
@@ -290,7 +303,7 @@ def verify_gallery(url: str, session=None) -> dict:
         error   – why it failed ('' when ok)
         title   – gallery title ('' if unknown)
         images  – number of images (0 if unknown)
-        domain  – site that will actually be used (e-hentai.org / exhentai.org)
+        domain  – site that will actually be used (e-hentai.org / exhentai.org / nhentai.net)
         note    – extra info, e.g. that the other domain was used as a fallback
     """
     result = {"url": url, "ok": False, "error": "", "title": "", "images": 0, "domain": "", "note": ""}
@@ -299,6 +312,9 @@ def verify_gallery(url: str, session=None) -> dict:
         result["error"] = url_error
         remember_gallery_info(url, status="BAD", problem=short_problem(url_error))
         return result
+
+    if nhentai.is_nhentai_url(url):
+        return _verify_nhentai(url, result)
 
     try:
         soup = fetch_page(_normalize_album_url(url), session=session or create_session())
@@ -329,6 +345,33 @@ def verify_gallery(url: str, session=None) -> dict:
         problem=None if result["ok"] else "no gallery title found",
     )
     return result
+
+
+_nhentai_session = None
+
+
+def _verify_nhentai(url: str, result: dict) -> dict:
+    """verify_gallery() for nhentai links (one API request, own session and cookies)."""
+    global _nhentai_session  # pylint: disable=global-statement
+    if _nhentai_session is None:
+        _nhentai_session = nhentai.create_nhentai_session()
+    result["domain"] = nhentai.NHENTAI_HOST
+    try:
+        info = nhentai.fetch_gallery_info(url, session=_nhentai_session)
+    except Exception as err:  # pylint: disable=broad-except
+        result["error"] = str(err)
+        remember_gallery_info(url, status="BAD", problem=short_problem(str(err)))
+        return result
+    result.update(ok=True, title=info["title"], images=len(info["pages"]))
+    remember_gallery_info(url, title=info["title"], images=result["images"], status="GOOD")
+    return result
+
+
+def create_album_downloader(url: str, **kwargs) -> AlbumDownloader:
+    """Return the downloader for the site of the link (E-Hentai / ExHentai or nhentai)."""
+    if nhentai.is_nhentai_url(url):
+        return NHentaiAlbumDownloader(url=url, **kwargs)
+    return AlbumDownloader(url=url, **kwargs)
 
 
 def courtesy_pause() -> None:
@@ -403,8 +446,8 @@ def download_album(
     failed_items: list[str] = []
     remember_gallery_name(url, name_hint)
     try:
-        album_downloader = AlbumDownloader(
-            url=url,
+        album_downloader = create_album_downloader(
+            url,
             live_manager=live_manager,
             image_format=image_format,
             rename_sequential=rename_sequential,
@@ -444,18 +487,18 @@ def initialize_managers() -> LiveManager:
 def main() -> None:
     """Run the album downloader."""
     if len(sys.argv) != 2:
-        script_name = Path(__file__).name
-        message = f"Usage: python3 {script_name} <album_url>"
+        message = "Usage (from the project folder): python -m src.cli.downloader <album_url>"
         logging.error(message)
         sys.exit(1)
 
     clear_terminal()
     url = sys.argv[1]
-    append_session_banner(f"SINGLE CLI START (downloader.py: {url})")
+    append_session_banner(f"SINGLE CLI START (src.cli.downloader: {url})")
     live_manager = initialize_managers()
     ok, _ = download_album(url, live_manager)
-    append_session_banner(f"SINGLE CLI END (downloader.py: {url}) - Result: {'OK' if ok else 'ERRORS'}")
+    append_session_banner(f"SINGLE CLI END (src.cli.downloader: {url}) - Result: {'OK' if ok else 'ERRORS'}")
 
 
 if __name__ == "__main__":
+    os.chdir(PROJECT_ROOT)  # Downloads/, cookies.json, ... live in the project folder
     main()

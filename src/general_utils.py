@@ -17,7 +17,7 @@ from urllib.parse import urlparse
 import requests
 from bs4 import BeautifulSoup
 
-from src import throttle
+from src import nhentai, throttle
 from src.config import (
     CONNECTION_TIMEOUT,
     MAX_BAN_WAITS,
@@ -37,15 +37,19 @@ GALLERY_TOKEN_RE = re.compile(r"^[0-9a-f]{10}$")
 def validate_gallery_url(url: str) -> str | None:
     """Return an error message if the URL is not a well-formed gallery link, else None.
 
-    A gallery link looks like https://e-hentai.org/g/<gallery id>/<token>/ where the
+    nhentai links (https://nhentai.net/g/<gallery id>/) are checked by src.nhentai.
+
+    An E-Hentai gallery link looks like https://e-hentai.org/g/<gallery id>/<token>/ where the
     token is always 10 hexadecimal characters. A shorter/longer token usually means the
     link was copied incompletely, and the site answers "Key missing, or incorrect key provided."
     """
+    if nhentai.is_nhentai_url(url):
+        return nhentai.validate_nhentai_url(url)
     match = GALLERY_URL_RE.match(url.strip())
     if not match:
         return (
             f"Invalid gallery URL: {url}. Expected https://e-hentai.org/g/<number>/<token>/ "
-            "(or the same on exhentai.org)."
+            "(or the same on exhentai.org), or https://nhentai.net/g/<number>/."
         )
     token = match.group(2)
     if not GALLERY_TOKEN_RE.match(token):
@@ -241,7 +245,10 @@ def load_cookies() -> dict[str, str]:
             with json_path.open("r", encoding="utf-8") as f:
                 data = json.load(f)
                 if isinstance(data, dict):
-                    _cached_cookies = {str(k): str(v) for k, v in data.items()}
+                    # Sections like "nhentai": {...} belong to other sites: never send them here
+                    _cached_cookies = {
+                        str(k): str(v) for k, v in data.items() if not isinstance(v, (dict, list))
+                    }
                     return _cached_cookies
         except Exception as err:
             logging.warning(f"Error reading cookies.json: {err}")

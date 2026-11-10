@@ -13,6 +13,9 @@ Two things live here:
   a safety margin is added and every request waits until it is over. The current album
   is paused, not skipped: nothing moves on to the next gallery while the ban lasts.
 
+* nhentai "Too Many Requests" (HTTP 429): same pause, for the time the site asks
+  (Retry-After) plus a random 10-15 s margin (NHENTAI_BLOCK_EXTRA_WAIT).
+
 * User pause (GUI "Pause" button): no new request starts until "Resume"; images already
   being received finish normally.
 """
@@ -48,6 +51,7 @@ _speed = DEFAULT_SPEED if DEFAULT_SPEED in SPEED_LEVELS else 3
 _next_slot = 0.0          # monotonic time of the next allowed page request
 _ban_until = 0.0          # monotonic time when the current ban (plus margin) ends
 _ban_listeners: list[Callable[[float], None]] = []
+_ban_source = "E-Hentai"  # site that asked for the current pause (shown by the GUI)
 _running = threading.Event()  # cleared = paused by the user
 _running.set()
 
@@ -137,30 +141,41 @@ def ban_seconds_from_page(text: str) -> int | None:
     return BAN_DEFAULT_WAIT
 
 
-def report_ban(seconds: int) -> None:
-    """Record a ban of the given length; every request waits until it ends (plus a margin)."""
-    global _ban_until, _next_slot
-    margin = random.uniform(*BAN_EXTRA_WAIT)  # noqa: S311
+def report_ban(seconds: float, source: str = "E-Hentai",
+               margin_range: tuple[float, float] = BAN_EXTRA_WAIT) -> None:
+    """Record a ban / rate limit of the given length; every request waits until it ends
+    (plus a random margin). source names the site in the messages ("E-Hentai", "nhentai")."""
+    global _ban_until, _next_slot, _ban_source
+    margin = random.uniform(*margin_range)  # noqa: S311
     until = time.monotonic() + seconds + margin
     with _lock:
         is_new = until > _ban_until + 5  # several threads report the same ban at once
         _ban_until = max(_ban_until, until)
         _next_slot = max(_next_slot, _ban_until)
+        if is_new:
+            _ban_source = source
         listeners = list(_ban_listeners)
         current_until = _ban_until
     if not is_new:
         return
     total = int(current_until - time.monotonic())
+    what = "IP temporarily banned" if source == "E-Hentai" else "Too many requests: blocked for a while"
     logging.warning(
-        "IP temporarily banned by E-Hentai (too many requests). Downloads paused for "
-        f"{total // 60}m {total % 60:02d}s ({seconds}s ban + {margin:.0f}s margin), then they resume "
-        "from where they stopped. Tip: lower the speed, or switch IP with a VPN and press 'Resume now'."
+        f"{what} by {source}. Downloads paused for "
+        f"{total // 60}m {total % 60:02d}s ({seconds:.0f}s asked by the site + {margin:.0f}s margin), then "
+        "they resume from where they stopped. Tip: lower the speed, or switch IP with a VPN and press "
+        "'Resume now'."
     )
     for callback in listeners:
         try:
             callback(current_until)
         except Exception:  # a GUI callback must never break a download thread
             pass
+
+
+def ban_source() -> str:
+    """Site that asked for the current pause ("E-Hentai" or "nhentai")."""
+    return _ban_source
 
 
 def ban_remaining() -> float:

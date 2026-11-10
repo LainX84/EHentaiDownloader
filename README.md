@@ -1,6 +1,6 @@
 # E-Hentai Downloader
 
-> A Python tool to download E-Hentai and ExHentai galleries, with a simple desktop GUI and a command-line interface.
+> A Python tool to download E-Hentai, ExHentai and nhentai galleries, with a simple desktop GUI and a command-line interface.
 
 ![Demo](assets/demo.jpg)
 
@@ -8,26 +8,39 @@
 
 ---
 
+## What's new
+
+- **nhentai.net support** through the site's public API v2 (no account needed), with its 20-requests-per-minute limit respected and a pause with countdown (+10–15 s) when the site asks to slow down.
+- **Menu bar** (File / Settings / Help) that follows the theme, also on Windows; Auto Rename, CBZ archive, Speed (1x–5x), When done and Theme moved there.
+- **Light, dark and automatic theme**, platform fonts, tabs of equal size.
+- **Account & cookies** window that writes `cookies.json` from cookies pasted from the browser or a `cookies.txt`.
+- **Start-up notice** (disclaimer) with *Don't show this again for 30 days*; *Help* menu with GitHub, license and about.
+
+---
+
 ## Features
 
+- 🌐 **Three sites**: E-Hentai, ExHentai and **nhentai.net** (`https://nhentai.net/g/<number>/`). Paste the link as usual: the site is recognised automatically and the album is saved the same way (same formats, renaming, CBZ).
+- 🎨 **Light, dark or automatic theme** (follows the Windows / macOS / Linux setting), from **Settings → Theme**.
+- 🧭 **Menu bar**: *File* (folders, log, account cookies), *Settings* (Auto Rename, CBZ, Speed, When done, Theme), *Help* (GitHub, report a problem, disclaimer, license, about).
 - 🖥️ **Desktop GUI** (Tkinter): single, batch and retry modes, live progress bars and a coloured log. Start it by double-clicking `EHentaiDownloader.pyw`.
 - 🖼️ **Image format conversion**
   - **AUTO** (default): static images are converted to `.jpg`, animated images (animated GIF/WebP) keep their original format.
   - **Native**: save exactly what the server sends.
   - **JPG / PNG / WEBP**: force one format (animations are reduced to their first frame).
   - Uses **ImageMagick** when installed, otherwise **Pillow**.
-- 🔢 **Sequential renaming**: when an album is fully downloaded, images are renamed `01…N`. The number of digits depends on the image count: up to 99 → 2 digits (`01`), up to 999 → 3 (`001`), up to 9999 → 4 (`0001`)… Toggle it with the **Auto Rename** button in the GUI header.
-- 📚 **CBZ archives** (optional): each completed album is saved as a single `Downloads/<gallery title>.cbz` (no album folder), pages named `01…N` (zero-padded so every reader shows them in order) plus a `ComicInfo.xml`; the images and their temp folder are deleted only after the archive is verified (if it cannot be made, the album is saved as a normal folder). Toggle it with the **CBZ archive** button in the GUI header. Albums already archived are skipped on later runs.
+- 🔢 **Sequential renaming**: when an album is fully downloaded, images are renamed `01…N`. The number of digits depends on the image count: up to 99 → 2 digits (`01`), up to 999 → 3 (`001`), up to 9999 → 4 (`0001`)… Toggle it in **Settings → Auto Rename**.
+- 📚 **CBZ archives** (optional): each completed album is saved as a single `Downloads/<gallery title>.cbz` (no album folder), pages named `01…N` (zero-padded so every reader shows them in order) plus a `ComicInfo.xml`; the images and their temp folder are deleted only after the archive is verified (if it cannot be made, the album is saved as a normal folder). Toggle it in **Settings → CBZ archive**. Albums already archived are skipped on later runs.
 - ✅ **Completeness check**: an album counts as complete only if every page is really on disk; otherwise it goes to the retry queue.
 - 🛟 **Resilient downloads**
   - Network errors, timeouts and HTTP 429/5xx are retried with increasing waits.
   - If an image server is broken, another one is requested through the gallery's "reload" link.
   - The 509 "image quota exceeded" placeholder is detected: it is never saved as a page, and the album is queued for retry.
-- ⚡ **Parallel downloads** with an adjustable **speed** (GUI slider, 1 Very slow … 5 Very fast): it sets the pause between page requests, shared by all threads, and how many images download at once. One page request per image (the "reload" link is used only when an image server fails).
-- ⏸ **IP-ban pause**: when E-Hentai answers *"This IP address has been temporarily banned … The ban expires in X minutes and Y seconds"*, the ban time is read from the page and every download pauses for that long plus 30–45 s, then resumes the same album (it never skips to the next one). The status bar shows a countdown; after switching IP (e.g. with a VPN) press **Resume now**.
+- ⚡ **Parallel downloads** with an adjustable **speed** (**Settings → Speed**, 1x Very slow … 5x Very fast): it sets the pause between page requests, shared by all threads, and how many images download at once. One page request per image (the "reload" link is used only when an image server fails).
+- ⏸ **IP-ban pause**: when E-Hentai answers *"This IP address has been temporarily banned … The ban expires in X minutes and Y seconds"*, the ban time is read from the page and every download pauses for that long plus 30–45 s, then resumes the same album (it never skips to the next one). When nhentai answers *Too Many Requests* (HTTP 429) the same pause is used, for the time asked by the site plus a random 10–15 s. The status bar shows a warning with a countdown; after switching IP (e.g. with a VPN) press **Resume now**.
 - ♻️ **Resume**: images already on disk (also from earlier runs or renamed files) are skipped. Every image is first written to a `.part` temp file and renamed only when complete, so an interrupted run can never leave a truncated image that looks finished (leftover `.part` files are deleted on the next run).
 - 📋 **Batch mode** from `URLs.txt` and 🔄 **retry queue** in `failed_downloads.txt`.
-- 🔍 **Link check before downloading**: malformed links (e.g. a token missing a character) are reported before starting; *Verify Links* also checks every gallery online and shows its title, size and the site it will be downloaded from (e-hentai.org or exhentai.org).
+- 🔍 **Link check before downloading**: malformed links (e.g. a token missing a character) are reported before starting; *Verify Links* also checks every gallery online and shows its title, size and the site it will be downloaded from (e-hentai.org, exhentai.org or nhentai.net).
 - 🧹 **Duplicate cleanup**: links pointing to the same gallery are detected (by gallery id, even with a different domain or a broken token) and removed after confirmation, keeping the valid link.
 - 🏷️ **Clear lists**: after verification each line shows `GOOD/BAD | images | title | link`, and every error and failure summary names the gallery, not just its link.
 - 🗂️ **Log rotation**: `session.log` rotates automatically (`session.log.1` … `session.log.3`).
@@ -36,7 +49,7 @@
 
 ## Requirements
 
-- **Python 3.10+** (with Tkinter, included in the official Windows/macOS installers)
+- **Python 3.10+** (with Tkinter, included in the official Windows/macOS installers; on Linux install it with the system package, e.g. `sudo apt install python3-tk` on Debian/Ubuntu, `sudo dnf install python3-tkinter` on Fedora)
 - Python packages: `beautifulsoup4`, `requests`, `rich`, `Pillow`
 - *(Optional)* [ImageMagick](https://imagemagick.org/script/download.php) in the system `PATH` for faster conversions
 
@@ -56,9 +69,15 @@ pip install -r requirements.txt
 
 E-Hentai galleries work without logging in. ExHentai galleries and some restricted galleries need your account cookies.
 
-1. Log in to e-hentai.org / exhentai.org in your browser.
-2. Open the browser developer tools → *Storage* / *Application* → *Cookies*.
-3. Copy `cookies.example.json` to `cookies.json` and fill in your values:
+**Easiest way, from the GUI: File → Account & cookies…**
+
+1. Press the button of the site: the login page opens in your usual browser (any browser: Chrome, Chromium, Edge, Firefox, also Flatpak / Snap installs). Log in.
+2. Open the developer tools (F12, or Cmd+Option+I on macOS) → *Application* / *Storage* → *Cookies* → the site, select the cookie rows and copy them (or export a `cookies.txt` with a browser extension).
+3. Press **Paste** (or **Import cookies.txt…**): the program reads only `ipb_member_id`, `ipb_pass_hash` and `igneous`, ignores everything else, and **Save** writes `cookies.json` for you.
+
+The same window has an optional field for an **nhentai API key** (not needed; with it the API limit goes from 20 to 45 requests per minute).
+
+By hand: copy `cookies.example.json` to `cookies.json` and fill in your values:
 
 ```json
 {
@@ -69,6 +88,14 @@ E-Hentai galleries work without logging in. ExHentai galleries and some restrict
 ```
 
 A Netscape-format `cookies.txt` (exported by browser extensions) also works.
+
+## nhentai (nothing to set up)
+
+nhentai galleries work without an account and without cookies. The program reads the whole gallery with **one request** to the site's public API v2 (`/api/v2/galleries/<id>`; the gallery page is used if the API does not answer), gets the list of image servers from `/api/v2/cdn` once per run, and then downloads the images, switching to another server if one does not answer.
+
+The API allows **20 requests per minute per IP** without an account: API requests are spaced by at least 3.2 s (`NHENTAI_API_INTERVAL`), they follow the **Speed** and the **Pause** button, and HTTP 429 (*Too Many Requests*) pauses every download for the time asked plus 10–15 s, with a warning and a countdown. Downloading a gallery takes 1–2 API requests, so even *Verify Links* on long lists stays within the limit.
+
+Only if nhentai ever showed the program a Cloudflare check (*"Just a moment…"*) the log would say so: in that case you can add your browser's `cf_clearance` cookie and User-Agent to an optional `"nhentai"` section of `cookies.json` (see `cookies.example.json`). The User-Agent must be the one of the browser the cookie comes from. nhentai cookies are only sent to nhentai.net, and E-Hentai cookies are never sent to nhentai.
 
 > ⚠️ **Never share or commit `cookies.json` / `cookies.txt`**: they give full access to your account. Both are already listed in `.gitignore`.
 
@@ -87,14 +114,18 @@ python EHentaiDownloader.pyw
 | Area | What it does |
 | :--- | :--- |
 | **Image Format** | Output format for all downloads (see the table below). |
-| **Auto Rename** | ON/OFF: rename images `01…N` when an album is complete. |
-| **CBZ archive** | ON/OFF: save each completed album as `Downloads/<gallery title>.cbz` instead of a folder of images. |
-| **Speed** slider | Bottom right: 1 Very slow … 5 Very fast (default 3 Normal). Lower it if you get temporary IP bans. The request pace changes at once, the number of parallel downloads from the next album. |
+| **File** menu | *Open Downloads folder*, *Open log file*, *Account & cookies…* (fills `cookies.json`, see above), *Exit*. |
+| **Settings → Auto Rename** | ON/OFF: rename images `01…N` when an album is complete. |
+| **Settings → CBZ archive** | ON/OFF: save each completed album as `Downloads/<gallery title>.cbz` instead of a folder of images. |
+| **Settings → Speed** | 1x Very slow … 5x Very fast (default 3x Normal), also shown bottom right (click it to change). Lower it if you get temporary IP bans. The request pace changes at once, the number of parallel downloads from the next album. |
+| **Settings → Theme** | *Automatic (system)*, *Light* or *Dark*; the window changes at once. *Automatic* follows the system setting (checked every minute). |
+| **Help** menu | GitHub page, *Report a problem* (GitHub issues), *Disclaimer*, *License* (GPL-3.0 and third-party software), *About*. |
+| *Start-up notice* | At start the program shows the disclaimer (no warranty, use at your own risk, may stop working, developed with the help of Claude AI). *Decline and exit* closes the program; *Don't show this again for 30 days* hides it for a month (`DISCLAIMER_SNOOZE_DAYS`). |
 | **Pause / Resume** | Next to *Start Batch*, active while a download runs: no new request starts (images already being received finish), freeing the bandwidth. On pause `URLs.txt` is saved and the album in progress stays in `temp/`, so you can also close the program (no confirmation asked) or shut down the PC: the next *Start Batch* resumes from that album, skipping the pages already on disk. |
-| **When done** | Bottom right: *Do nothing*, *Close program* or *Shut down PC* when all downloads are finished (handy for a list left running overnight). A 60 s countdown lets you cancel; the list and settings are saved first. You can change it while a download runs. It always starts as *Do nothing* (never remembered, so the PC is not switched off by surprise next time). |
+| **When done** | Bottom right, and in **Settings → When done**: *Do nothing*, *Close program* or *Shut down PC* when all downloads are finished (handy for a list left running overnight). A 60 s countdown lets you cancel; the list and settings are saved first. You can change it while a download runs. It always starts as *Do nothing* (never remembered, so the PC is not switched off by surprise next time). |
 | **Resume now** | Appears in the status bar during a temporary IP ban: stop waiting after you changed IP (VPN). If the ban is still active the pause simply starts again. |
-| *Remembered settings* | Image Format, Auto Rename, CBZ archive and Speed are saved in `settings.json` as soon as you change them and restored at the next start (delete the file to go back to the `src/config.py` defaults). |
-| **Open Downloads** | Button on the right of the tab bar (always visible): opens the `Downloads` folder. |
+| *Remembered settings* | Image Format, Auto Rename, CBZ archive, Speed, Theme and the start-up notice choice are saved in `settings.json` as soon as you change them and restored at the next start (delete the file to go back to the `src/config.py` defaults). |
+| **Open Downloads** | Button on the right of the tab bar (always visible, also in *File*): opens the `Downloads` folder. |
 | **Single Download** tab | Paste one gallery URL and press *Start Download*. |
 | **Batch Download** tab | Editor for `URLs.txt`: one URL per line, lines starting with `#` are skipped. *Start Batch* first checks for duplicates and malformed links. The list is saved automatically every few seconds; while the batch runs you can keep adding links at the bottom and they are queued too. Links never verified are checked online in parallel with the download (unreadable ones are skipped and go to *Retry Failed*). Downloaded lines turn green and disappear after ~45 s; *Clear All* asks for confirmation. |
 | **Duplicates** button | Finds links to the same gallery and, after confirmation, keeps one link per gallery. |
@@ -104,16 +135,20 @@ python EHentaiDownloader.pyw
 
 ### 2. Command line
 
+Run these from the project folder (the one with `EHentaiDownloader.pyw`):
+
 ```bash
 # Single gallery
-python downloader.py https://e-hentai.org/g/3392858/1a77348e16/
+python -m src.cli.downloader https://e-hentai.org/g/3392858/1a77348e16/
 
 # Every URL in URLs.txt (one per line), plus albums waiting in the retry queue
-python main.py
+python -m src.cli.main
 
 # Retry only the albums in failed_downloads.txt
-python retry.py
+python -m src.cli.retry
 ```
+
+The GUI and the command line share the same `URLs.txt` and `failed_downloads.txt`.
 
 The CLI uses `DEFAULT_IMAGE_FORMAT`, `RENAME_SEQUENTIAL` and `CREATE_CBZ` from `src/config.py`.
 
@@ -170,6 +205,12 @@ All settings are in [`src/config.py`](src/config.py):
 | `IMAGE_FETCH_RETRIES` | `3` | Attempts on the same image server before switching. |
 | `PAGE_FETCH_RETRIES` | `3` | Attempts for HTML pages on temporary errors. |
 | `ALBUM_PAGE_DELAY` | `(0.5, 1.5)` | Random pause (seconds) between gallery pages. |
+| `NHENTAI_IMAGE_MIRRORS` | `i1`…`i4.nhentai.net`, `i.nhentai.net` | nhentai image servers used when the site's list (`/api/v2/cdn`) can't be read (a server that fails is moved to the end). |
+| `NHENTAI_API_INTERVAL` / `NHENTAI_API_INTERVAL_KEY` | `3.2` / `1.4` | Minimum seconds between nhentai API requests without / with an API key (site limit: 20 / 45 per minute per IP). |
+| `NHENTAI_BLOCK_EXTRA_WAIT` | `(10, 15)` | Random extra seconds waited after the time asked by nhentai on HTTP 429. |
+| `DISCLAIMER_SNOOZE_DAYS` | `30` | Days the start-up notice stays hidden after *Don't show this again*. |
+| `NHENTAI_MAX_MIRRORS` | `4` | nhentai mirrors tried per image before it is marked as failed. |
+| `NHENTAI_IMAGE_DELAY` | `(0.4, 1.2)` | Random pause (seconds) after each nhentai image, per download thread. |
 | `CONNECTION_TIMEOUT` | `30` | Network timeout in seconds. |
 | `RATE_LIMIT_SLEEPING_TIME` | `60` | Wait in seconds after a rate-limit response. |
 | `BAN_EXTRA_WAIT` | `(30, 45)` | Extra random seconds waited after a temporary IP ban expires. |
@@ -186,6 +227,9 @@ All settings are in [`src/config.py`](src/config.py):
 2. For every image page, the direct image link is taken from the image viewer page.
 3. Images are downloaded in parallel into `temp/<album>/`, converted if needed, and saved as `NN_originalname.ext` while the album is in progress (each one through a `.part` temp file).
 4. When nothing failed and every page is on disk, the images are renamed `01…N` (if enabled) and the album is moved to `Downloads/<clean gallery title>`. With **CBZ archive** ON, the images are instead packed straight from `temp/` into `Downloads/<clean gallery title>.cbz` and the temp folder is removed.
+
+nhentai galleries work the same way, except steps 1–2: title, tags and the image path of every page come from a single request (API v2, or the gallery page as a fallback), so no per-image page is loaded; each image is taken directly from an image server (another mirror, or another file type if the site's one is wrong, is tried on failure).
+
 5. Albums with missing images stay in `temp/` and are written to `failed_downloads.txt` for a later retry; images already downloaded are not downloaded again.
 
 ---
@@ -196,10 +240,13 @@ All settings are in [`src/config.py`](src/config.py):
 | :--- | :--- |
 | `Image limit … 509` | Your E-Hentai image quota is exhausted. Wait (or reset it from your account), then use *Retry Failed*. |
 | `cookies rejected … igneous=mystery` / `Sad Panda` | ExHentai cookies missing, expired or wrong: update `cookies.json`. |
-| `IP temporarily banned by E-Hentai … Downloads paused` | Too many requests. Nothing to do: downloads resume by themselves when the ban ends (+30–45 s). Lower the **Speed** slider to avoid it, or switch IP with a VPN and press **Resume now**. |
+| `IP temporarily banned by E-Hentai … Downloads paused` | Too many requests. Nothing to do: downloads resume by themselves when the ban ends (+30–45 s). Lower the **Speed** to avoid it, or switch IP with a VPN and press **Resume now**. |
 | `CBZ failed` / `CBZ skipped` | The archive could not be written or verified (or pages were duplicated): the album is saved as a normal folder instead, nothing is lost. |
 | `Rename skipped` | Some pages were missing or duplicated on disk, so images were left with their download names. |
 | `Invalid gallery URL … token` / `Key missing, or incorrect key provided` | The link is incomplete or mistyped: copy it again from the browser. |
+| `Too many requests: blocked for a while by nhentai` | nhentai asked to slow down (HTTP 429): every download pauses for the time asked plus 10–15 s, with a countdown in the status bar, then continues by itself. Lower the **Speed**, or switch IP with a VPN and press **Resume now**. |
+| `Cloudflare browser check` (nhentai) | nhentai asked for a browser check: add `cf_clearance` and `user_agent` to the `"nhentai"` section of `cookies.json` (see *nhentai* above). |
+| `gallery … does not exist or was removed from nhentai` | Wrong gallery number, or the gallery was deleted. |
 | `exhentai.org did not answer correctly, using e-hentai.org` | ExHentai is down or your cookies are not valid: the gallery is downloaded from e-hentai.org instead (only works for galleries that exist there). |
 
 ---
@@ -209,23 +256,29 @@ All settings are in [`src/config.py`](src/config.py):
 ```
 EHentaiDownloader/
 ├── EHentaiDownloader.pyw    # GUI (double-click to start on Windows)
-├── downloader.py            # CLI: single gallery
-├── main.py                  # CLI: batch download from URLs.txt
-├── retry.py                 # CLI: retry failed_downloads.txt
-├── cookies.example.json     # Template for your ExHentai cookies
+├── cookies.example.json     # Template for your ExHentai (and optional nhentai) cookies
 ├── .pylintrc                # Pylint settings used by the GitHub Actions check
 ├── requirements.txt
 ├── assets/                  # README images
 └── src/
+    ├── cli/
+    │   ├── downloader.py    # CLI: single gallery + download logic shared with the GUI
+    │   ├── main.py          # CLI: batch download from URLs.txt
+    │   └── retry.py         # CLI: retry failed_downloads.txt
     ├── config.py            # All settings
     ├── file_utils.py        # Files, folder names, session log + rotation
     ├── general_utils.py     # HTTP session, cookies, page fetching with retries & diagnostics
-    ├── throttle.py          # Speed levels (request pacing) and temporary IP-ban pause
+    ├── nhentai.py           # nhentai: link check, gallery data (API v2 / page), image servers
+    ├── throttle.py          # Speed levels (request pacing) and temporary IP-ban / rate-limit pause
+    ├── ui_theme.py          # Light / dark / automatic theme, platform fonts
+    ├── gui_dialogs.py       # Start-up notice, Account & cookies, License, About windows
+    ├── cookie_import.py     # Reads pasted cookies / cookies.txt, writes cookies.json
     ├── crawler/
     │   ├── crawler.py       # Gallery parsing: title, image count, page list
     │   └── crawler_utils.py # Link helpers ("reload" token, picture pages)
     ├── downloader/
     │   ├── album_downloader.py  # Download, conversion, completeness check, renaming
+    │   ├── nhentai_downloader.py # Same, for nhentai galleries
     │   └── download_utils.py    # Image requests with retries and backoff
     └── managers/            # Rich terminal display used by the CLI
 ```
@@ -237,6 +290,13 @@ Files created at runtime (and ignored by git): `Downloads/`, `temp/`, `URLs.txt`
 ## Disclaimer
 
 This tool is for personal use. Respect the website's terms of service and do not overload its servers.
+
+- The developer takes no responsibility for bans, blocks, account restrictions, copyright issues or any other problem coming from the use of this program.
+- The program is free and provided **as is**, without any warranty: you use it at your own risk.
+- The websites can change at any time, so the program may stop working, completely or in part. Bugs can be reported in the [issues](https://github.com/LainX84/EHentaiDownloader/issues), but a quick answer is not guaranteed; you are free to fork it and fix problems yourself, keeping the credits to the [original project](https://github.com/Lysagxra/EHentaiDownloader) and to this version.
+- This version has been developed and modified with the help of **Claude AI** (Anthropic).
+
+The same notice is shown when the program starts (*Help → Disclaimer* shows it again).
 
 ## License
 

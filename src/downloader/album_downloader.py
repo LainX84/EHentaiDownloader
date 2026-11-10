@@ -115,6 +115,14 @@ class AlbumDownloader:
             "Source",
             f"\"{self.clean_album_name}\" — {self.total_images} images — from {used_domain}{fallback_note}",
         )
+        self._init_storage()
+
+    def _init_storage(self) -> None:
+        """Pick (or create) the album folder and reset the per-album counters.
+
+        Needs self.album_name, self.clean_album_name and self.total_images.
+        """
+        self.extra_info: dict[str, str] = getattr(self, "extra_info", {})
         self.index_width = max(2, len(str(self.total_images))) if self.total_images > 0 else 3
         # Albums are downloaded into TEMP_FOLDER and moved to DOWNLOAD_FOLDER only once complete.
         # A partial download is resumed from wherever it already is: first the temp folder,
@@ -371,8 +379,16 @@ class AlbumDownloader:
         self._save_bytes(fallback_path, content)
 
     def download_album(self) -> list[str]:
-        """Download all images from the album while tracking progress."""
-        # An album already packed into a complete CBZ is done: nothing to download again
+        """Download all images from the album while tracking progress.
+
+        Returns the list of items (picture pages / image URLs) that failed.
+        """
+        if self._skip_if_archived():
+            return []
+        return self._complete_album(self._download_pages())
+
+    def _skip_if_archived(self) -> bool:
+        """True (and progress shown as complete) when the album is already a complete CBZ."""
         existing_cbz = self._find_complete_cbz()
         if existing_cbz is not None:
             if hasattr(self.live_manager, "start_album"):
@@ -386,8 +402,11 @@ class AlbumDownloader:
             )
             if hasattr(self.live_manager, "update_album_progress"):
                 self.live_manager.update_album_progress(self.total_images, self.total_images)
-            return []
+            return True
+        return False
 
+    def _download_pages(self) -> list[str]:
+        """Download every page of an E-Hentai / ExHentai gallery; return the failed items."""
         album_pages_soups = self.crawler.collect_album_pages_soups()
         num_pages = len(album_pages_soups)
         total_failed_downloads: list[str] = []
@@ -453,7 +472,10 @@ class AlbumDownloader:
                 "Image limit",
                 "E-Hentai image quota exhausted (509): try again later with 'Retry Failed'.",
             )
+        return total_failed_downloads
 
+    def _complete_album(self, total_failed_downloads: list[str]) -> list[str]:
+        """Check every page is on disk, then make the CBZ or rename/move the folder."""
         # Treat the album as complete only if every page 1..N is actually on disk
         if not total_failed_downloads:
             missing = self._missing_pages()
@@ -566,7 +588,11 @@ class AlbumDownloader:
             '<ComicInfo xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" '
             'xmlns:xsd="http://www.w3.org/2001/XMLSchema">\n'
             f"  <Title>{title}</Title>\n"
-            f"  <PageCount>{page_count}</PageCount>\n"
+            + "".join(
+                f"  <{key}>{escape(value)}</{key}>\n"
+                for key, value in getattr(self, "extra_info", {}).items() if value
+            )
+            + f"  <PageCount>{page_count}</PageCount>\n"
             f"  <Web>{escape(self.url)}</Web>\n"
             "</ComicInfo>\n"
         )

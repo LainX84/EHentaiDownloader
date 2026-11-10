@@ -30,6 +30,24 @@ PAGE_FETCH_RETRIES = 3    # Attempts for gallery / picture HTML pages on transie
 ALBUM_PAGE_DELAY = (0.5, 1.5)  # Random pause (seconds) between gallery index pages.
 
 # ============================
+# nhentai.net
+# ============================
+# Image servers used when the site's own list (/api/v2/cdn) can't be read; tried in order.
+NHENTAI_IMAGE_MIRRORS = (
+    "i1.nhentai.net", "i2.nhentai.net", "i3.nhentai.net", "i4.nhentai.net", "i.nhentai.net",
+)
+NHENTAI_BLOCK_EXTRA_WAIT = (10, 15)  # Random extra seconds after the wait asked by nhentai (HTTP 429).
+NHENTAI_BLOCK_DEFAULT_WAIT = 60      # Wait used when nhentai does not say how long (no Retry-After).
+NHENTAI_API_INTERVAL = 3.2      # Min. seconds between nhentai API requests (site limit: 20/min per IP).
+NHENTAI_API_INTERVAL_KEY = 1.4  # Same, with an nhentai API key in cookies.json (limit: 45/min per IP).
+PROJECT_URL = "https://github.com/LainX84/EHentaiDownloader"
+ISSUES_URL = f"{PROJECT_URL}/issues"
+UPSTREAM_URL = "https://github.com/Lysagxra/EHentaiDownloader"
+DISCLAIMER_SNOOZE_DAYS = 30     # "Don't show again" hides the start-up notice for this many days.
+NHENTAI_MAX_MIRRORS = 4         # Mirrors tried per image before giving up on it (until 'Retry Failed').
+NHENTAI_IMAGE_DELAY = (0.4, 1.2)  # Random pause (seconds) after each image, per download thread.
+
+# ============================
 # Batch list (GUI)
 # ============================
 AUTOSAVE_INTERVAL = 10       # Seconds between automatic saves of the batch list to URLs.txt.

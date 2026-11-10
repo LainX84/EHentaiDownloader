@@ -6,9 +6,9 @@ Double-click this file on Windows to start the program without a console window
     python EHentaiDownloader.pyw
 
 The window wraps the three command-line modes of the project:
-  • Single Download  – one gallery URL            (same logic as downloader.py)
-  • Batch Download   – every URL in URLs.txt      (same logic as main.py)
-  • Retry Failed     – albums in failed_downloads.txt (same logic as retry.py)
+  • Single Download  – one gallery URL            (same logic as src/cli/downloader.py)
+  • Batch Download   – every URL in URLs.txt      (same logic as src/cli/main.py)
+  • Retry Failed     – albums in failed_downloads.txt (same logic as src/cli/retry.py)
 
 How it works:
   - Downloads run in a background thread, so the window never freezes.
@@ -54,32 +54,54 @@ from src.config import (
     SESSION_LOG,
     SETTINGS_FILE,
 )
-from src import throttle
+from src import gui_dialogs, throttle, ui_theme
+from src.config import ISSUES_URL, PROJECT_URL
 from src.file_utils import append_session_banner, append_session_log
 
 # ---------------------------------------------------------------------------
 # Colour / style constants
 # ---------------------------------------------------------------------------
-BG       = "#F5F7FA"       # window background
-PANEL    = "#FFFFFF"       # card/panel background
-ACCENT   = "#4A90D9"       # primary blue
-ACCENT2  = "#357ABD"       # darker blue (hover / active)
-SUCCESS  = "#27AE60"       # green
-WARNING  = "#E67E22"       # orange
-ERROR    = "#E74C3C"       # red
-MUTED    = "#95A5A6"       # grey text
-BORDER   = "#DDE3EA"       # subtle border
-TEXT     = "#2C3E50"       # main text
-TEXT_SEC = "#606F7B"       # secondary text
+# Colours are module globals named like the keys of the src.ui_theme palettes. They start
+# with the light palette; EHentaiGUI._apply_theme() swaps them (and every widget) at runtime.
+BG = ui_theme.LIGHT["BG"]
+PANEL = ui_theme.LIGHT["PANEL"]
+ACCENT = ui_theme.LIGHT["ACCENT"]
+ACCENT2 = ui_theme.LIGHT["ACCENT2"]
+SUCCESS = ui_theme.LIGHT["SUCCESS"]
+WARNING = ui_theme.LIGHT["WARNING"]
+ERROR = ui_theme.LIGHT["ERROR"]
+MUTED = ui_theme.LIGHT["MUTED"]
+BORDER = ui_theme.LIGHT["BORDER"]
+TEXT = ui_theme.LIGHT["TEXT"]
+TEXT_SEC = ui_theme.LIGHT["TEXT_SEC"]
+TAB_HOVER = ui_theme.LIGHT["TAB_HOVER"]
+TASK_BAR = ui_theme.LIGHT["TASK_BAR"]
+ON_ACCENT = ui_theme.LIGHT["ON_ACCENT"]
+DANGER_ACTIVE = ui_theme.LIGHT["DANGER_ACTIVE"]
+SELECT_BG = ui_theme.LIGHT["SELECT_BG"]
+RETRY_BG = ui_theme.LIGHT["RETRY_BG"]
+LINE_QUEUED_BG = ui_theme.LIGHT["LINE_QUEUED_BG"]
+LINE_ACTIVE_BG = ui_theme.LIGHT["LINE_ACTIVE_BG"]
+LINE_ACTIVE_FG = ui_theme.LIGHT["LINE_ACTIVE_FG"]
+LINE_DONE_BG = ui_theme.LIGHT["LINE_DONE_BG"]
+LINE_DONE_FG = ui_theme.LIGHT["LINE_DONE_FG"]
+LINE_FAIL_BG = ui_theme.LIGHT["LINE_FAIL_BG"]
+LINE_FAIL_FG = ui_theme.LIGHT["LINE_FAIL_FG"]
+OK_BANNER = ui_theme.LIGHT["OK_BANNER"]
+WARN_BANNER = ui_theme.LIGHT["WARN_BANNER"]
 
-FONT_UI    = ("Segoe UI",   10)
-FONT_SMALL = ("Segoe UI",   9)
-FONT_MONO  = ("Consolas",   9)
-FONT_TITLE = ("Segoe UI",  16, "bold")
-FONT_HEAD  = ("Segoe UI",  11, "bold")
-FONT_BTN   = ("Segoe UI",  10, "bold")
+_UI_FAMILY, _MONO_FAMILY = ui_theme.font_families()
+FONT_UI    = (_UI_FAMILY,   10)
+FONT_SMALL = (_UI_FAMILY,    9)
+FONT_MONO  = (_MONO_FAMILY,  9)
+FONT_MONO_BOLD = (_MONO_FAMILY, 9, "bold")
+FONT_TITLE = (_UI_FAMILY,   16, "bold")
+FONT_HEAD  = (_UI_FAMILY,   11, "bold")
+FONT_BTN   = (_UI_FAMILY,   10, "bold")
+DIALOG_FONTS = {"ui": FONT_UI, "small": FONT_SMALL, "mono": FONT_MONO, "title": FONT_TITLE, "head": FONT_HEAD}
 
 PAD = 12
+TAB_WIDTH = 18  # characters: the three tabs are always the same size
 
 # "When done" choices (status bar). Never remembered between runs: a forgotten
 # "Shut down PC" must not switch the computer off at the next, unrelated download.
@@ -99,7 +121,7 @@ class GUILiveManager:
 
     The real LiveManager drives a Rich Live terminal display; this one
     instead puts messages onto a thread-safe queue that the GUI polls.
-    It exposes the same public API used by AlbumDownloader / downloader.py,
+    It exposes the same public API used by AlbumDownloader / src/cli/downloader.py,
     plus intuitive progress tracking for single and batch downloads.
     """
 
@@ -391,8 +413,19 @@ class EHentaiGUI(tk.Tk):
         self._ban_tick_job = None
         throttle.add_ban_listener(lambda until: self._q.put(("BAN", until)))
 
+        # Theme: "auto" (follow the system), "light" or "dark"
+        self._theme_choice = tk.StringVar(
+            value=self._settings.get("theme") if self._settings.get("theme") in ui_theme.THEME_CHOICES
+            else ui_theme.THEME_AUTO
+        )
+        self._theme_active = ui_theme.THEME_LIGHT   # palette the widgets are drawn with
+
         self._setup_styles()
+        self._build_menu()
         self._build_ui()
+        self._refresh_speed_label()
+        self._apply_theme(ui_theme.resolve(self._theme_choice.get()), initial=True)
+        self.after(60_000, self._follow_system_theme)
         self._install_logging()
         self._poll_queue()
         self.after(AUTOSAVE_INTERVAL * 1000, self._autosave_tick)
@@ -409,22 +442,40 @@ class EHentaiGUI(tk.Tk):
 
         # General
         s.configure(".",             background=BG, foreground=TEXT,
-                     font=FONT_UI,  borderwidth=0, relief="flat")
+                     font=FONT_UI,  borderwidth=0, relief="flat",
+                     bordercolor=BORDER, lightcolor=BORDER, darkcolor=BORDER,
+                     troughcolor=BORDER, fieldbackground=PANEL, insertcolor=TEXT,
+                     selectbackground=ACCENT, selectforeground=ON_ACCENT)
         s.configure("TFrame",        background=BG)
         s.configure("Card.TFrame",   background=PANEL, relief="flat")
 
         # Notebook / tabs
-        s.configure("TNotebook",          background=BG, borderwidth=0)
+        s.configure("TNotebook", background=BG, borderwidth=0, tabmargins=(0, 0, 0, 0))
+        # Every tab has the same size, selected or not (clam enlarges the selected one by default):
+        # fixed width in characters, centred text, no "expand"; the selected tab is shown by colour.
         s.configure("TNotebook.Tab",
                     background=BORDER, foreground=TEXT_SEC,
-                    padding=(18, 8), font=FONT_UI)
+                    padding=(14, 7), font=FONT_UI, width=TAB_WIDTH, anchor="center",
+                    bordercolor=BORDER, lightcolor=BORDER, darkcolor=BORDER)
         s.map("TNotebook.Tab",
-              background=[("selected", PANEL), ("active", "#EBF2FB")],
-              foreground=[("selected", ACCENT), ("active", ACCENT)])
+              expand=[("selected", (0, 0, 0, 0))],
+              padding=[("selected", (14, 7))],
+              background=[("selected", ACCENT), ("active", TAB_HOVER)],
+              foreground=[("selected", ON_ACCENT), ("active", ACCENT)],
+              lightcolor=[("selected", ACCENT)],
+              bordercolor=[("selected", ACCENT)])
+        # Same layout without the dotted focus ring
+        s.layout("TNotebook.Tab", [
+            ("Notebook.tab", {"sticky": "nswe", "children": [
+                ("Notebook.padding", {"side": "top", "sticky": "nswe", "children": [
+                    ("Notebook.label", {"side": "top", "sticky": ""}),
+                ]}),
+            ]}),
+        ])
 
         # Buttons
         s.configure("Accent.TButton",
-                    background=ACCENT, foreground="#FFFFFF",
+                    background=ACCENT, foreground=ON_ACCENT,
                     font=FONT_BTN, padding=(16, 8),
                     relief="flat", borderwidth=0)
         s.map("Accent.TButton",
@@ -436,15 +487,15 @@ class EHentaiGUI(tk.Tk):
                     font=FONT_UI, padding=(10, 6),
                     relief="flat", borderwidth=1)
         s.map("Ghost.TButton",
-              background=[("active", "#EBF2FB"), ("disabled", PANEL)],
+              background=[("active", TAB_HOVER), ("disabled", PANEL)],
               foreground=[("disabled", MUTED)])
 
         s.configure("Danger.TButton",
-                    background="#E74C3C", foreground="#FFFFFF",
+                    background=ERROR, foreground=ON_ACCENT,
                     font=FONT_BTN, padding=(16, 8),
                     relief="flat", borderwidth=0)
         s.map("Danger.TButton",
-              background=[("active", "#C0392B"), ("disabled", BORDER)])
+              background=[("active", DANGER_ACTIVE), ("disabled", BORDER)])
 
         # Labels
         s.configure("Title.TLabel",
@@ -469,7 +520,7 @@ class EHentaiGUI(tk.Tk):
         s.layout("Horizontal.Task.TProgressbar",
                  s.layout("Horizontal.TProgressbar"))
         s.configure("Task.TProgressbar",
-                    troughcolor=BORDER, background="#8E44AD",
+                    troughcolor=BORDER, background=TASK_BAR,
                     thickness=10, borderwidth=0)
 
         # Separator
@@ -477,13 +528,207 @@ class EHentaiGUI(tk.Tk):
 
         # Scrollbar
         s.configure("TScrollbar",
-                    background=BORDER, troughcolor=BG,
-                    arrowcolor=MUTED, borderwidth=0)
+                    background=BORDER, troughcolor=BG, bordercolor=BG,
+                    lightcolor=BORDER, darkcolor=BORDER,
+                    arrowcolor=TEXT_SEC, borderwidth=0)
+        s.map("TScrollbar",
+              background=[("active", MUTED), ("disabled", BG)],
+              arrowcolor=[("disabled", MUTED)])
+        for orient in ("Vertical", "Horizontal"):
+            s.configure(f"{orient}.TScrollbar", background=BORDER, troughcolor=BG, bordercolor=BG,
+                        lightcolor=BORDER, darkcolor=BORDER, arrowcolor=TEXT_SEC, gripcount=0)
+            s.map(f"{orient}.TScrollbar", background=[("active", MUTED), ("disabled", BG)])
 
-        # Combobox
+        # Combobox (also the read-only look, used by every combobox of the window)
         s.configure("TCombobox",
                     fieldbackground=PANEL, background=PANEL, foreground=TEXT,
-                    arrowcolor=TEXT)
+                    arrowcolor=TEXT, bordercolor=BORDER, lightcolor=PANEL, darkcolor=PANEL,
+                    selectbackground=PANEL, selectforeground=TEXT)
+        s.map("TCombobox",
+              fieldbackground=[("readonly", PANEL), ("disabled", BG)],
+              foreground=[("readonly", TEXT), ("disabled", MUTED)],
+              background=[("active", TAB_HOVER), ("readonly", PANEL)],
+              selectbackground=[("readonly", PANEL)],
+              selectforeground=[("readonly", TEXT)],
+              arrowcolor=[("disabled", MUTED)])
+
+        # Check buttons in dialogs
+        s.configure("TCheckbutton", background=PANEL, foreground=TEXT_SEC)
+
+        # Entry: same border as the editors
+        s.map("TEntry", bordercolor=[("focus", ACCENT)], lightcolor=[("focus", ACCENT)])
+
+    # ------------------------------------------------------------------ menu bar
+
+    def _menu(self, parent) -> tk.Menu:
+        """A drop-down menu with the theme colours (Linux / macOS draw them with Tk)."""
+        return tk.Menu(
+            parent, tearoff=0, bg=PANEL, fg=TEXT, activebackground=ACCENT, activeforeground=ON_ACCENT,
+            selectcolor=ACCENT, disabledforeground=MUTED, relief="flat", bd=1,
+        )
+
+    def _build_menu(self) -> None:
+        """File / Settings / Help menus."""
+        self._menubar_frame = None
+        if sys.platform != "darwin":
+            # Windows draws its own menu bar (always light): use one made of themed buttons
+            self._menubar_frame = tk.Frame(self, bg=PANEL)
+            self._menubar_frame.pack(side="top", fill="x")
+            tk.Frame(self, bg=BORDER, height=1).pack(side="top", fill="x")
+        else:
+            self._menubar = self._menu(self)   # macOS: native menu bar at the top of the screen
+
+        file_menu = self._file_menu = self._top_menu("File")
+        file_menu.add_command(label="Open Downloads folder", command=self._open_downloads_folder)
+        file_menu.add_command(label="Open log file", command=self._open_session_log)
+        file_menu.add_separator()
+        file_menu.add_command(label="Account & cookies…", command=self._open_account_dialog)
+        file_menu.add_separator()
+        file_menu.add_command(label="Exit", command=self._on_window_close)
+
+        settings = self._settings_menu = self._top_menu("Settings")
+        settings.add_checkbutton(label="Auto Rename (01…N when complete)", variable=self._rename_var_init(),
+                                 command=self._on_rename_changed)
+        settings.add_checkbutton(label="CBZ archive", variable=self._cbz_var_init(),
+                                 command=self._on_cbz_changed)
+        settings.add_separator()
+
+        self._speed_var = tk.IntVar(value=throttle.get_speed())
+        speed_menu = self._speed_menu = self._menu(settings)
+        for level in range(throttle.MIN_SPEED, throttle.MAX_SPEED + 1):
+            name, pause, workers = throttle.SPEED_LEVELS[level]
+            speed_menu.add_radiobutton(
+                label=f"{level}x  {name}  ({workers} parallel, {pause:g} s between pages)",
+                variable=self._speed_var, value=level, command=self._on_speed_changed,
+            )
+        settings.add_cascade(label="Speed", menu=speed_menu)
+
+        self._when_done_var = StringVar(value=WHEN_DONE_NOTHING)
+        done_menu = self._menu(settings)
+        for choice in WHEN_DONE_OPTIONS:
+            done_menu.add_radiobutton(label=choice, variable=self._when_done_var, value=choice,
+                                      command=self._on_when_done_changed)
+        settings.add_cascade(label="When done", menu=done_menu)
+        settings.add_separator()
+
+        theme_menu = self._menu(settings)
+        for choice in ui_theme.THEME_CHOICES:
+            theme_menu.add_radiobutton(label=ui_theme.THEME_LABELS[choice], variable=self._theme_choice,
+                                       value=choice, command=self._on_theme_changed)
+        settings.add_cascade(label="Theme", menu=theme_menu)
+
+        help_menu = self._top_menu("Help")
+        help_menu.add_command(label="GitHub page", command=lambda: gui_dialogs.open_url(PROJECT_URL))
+        help_menu.add_command(label="Report a problem…", command=lambda: gui_dialogs.open_url(ISSUES_URL))
+        help_menu.add_separator()
+        help_menu.add_command(label="Disclaimer", command=lambda: gui_dialogs.show_disclaimer(
+            self, self._palette(), DIALOG_FONTS, self._settings, self._save_settings, startup=False))
+        help_menu.add_command(label="License", command=lambda: gui_dialogs.show_license(
+            self, self._palette(), DIALOG_FONTS))
+        help_menu.add_command(label="About", command=lambda: gui_dialogs.show_about(
+            self, self._palette(), DIALOG_FONTS))
+        if self._menubar_frame is None:
+            self.configure(menu=self._menubar)
+
+    def _top_menu(self, label: str) -> tk.Menu:
+        """One menu of the menu bar (themed button + drop-down, or native on macOS)."""
+        if self._menubar_frame is None:
+            menu = self._menu(self._menubar)
+            self._menubar.add_cascade(label=label, menu=menu)
+            return menu
+        button = tk.Menubutton(
+            self._menubar_frame, text=label, bg=PANEL, fg=TEXT, font=FONT_SMALL,
+            activebackground=TAB_HOVER, activeforeground=ACCENT, relief="flat", bd=0,
+            padx=10, pady=4, cursor="hand2", underline=0,
+        )
+        menu = self._menu(button)
+        button.configure(menu=menu)
+        button.pack(side="left")
+        # Alt+F / Alt+S / Alt+H open the menus, like a native menu bar
+        self.bind_all(f"<Alt-{label[0].lower()}>", lambda _e, b=button, m=menu: m.post(
+            b.winfo_rootx(), b.winfo_rooty() + b.winfo_height()))
+        return menu
+
+    def _rename_var_init(self) -> BooleanVar:
+        """Create the Auto Rename variable from the saved settings (menu is built first)."""
+        self._rename_var = BooleanVar(value=bool(self._settings.get("auto_rename", RENAME_SEQUENTIAL)))
+        return self._rename_var
+
+    def _cbz_var_init(self) -> BooleanVar:
+        """Create the CBZ archive variable from the saved settings."""
+        self._cbz_var = BooleanVar(value=bool(self._settings.get("cbz_archive", CREATE_CBZ)))
+        return self._cbz_var
+
+    def _set_menu_options_state(self, state: str) -> None:
+        """Lock Auto Rename / CBZ archive while a download runs (they are read at its start)."""
+        for index in (0, 1):
+            self._settings_menu.entryconfigure(index, state=state)
+
+    # ------------------------------------------------------------------ theme
+
+    def _palette(self) -> dict:
+        """Colours of the theme in use."""
+        return ui_theme.PALETTES[self._theme_active]
+
+    def _apply_theme(self, theme: str, initial: bool = False) -> None:
+        """Switch every colour of the window (and open dialogs) to the given palette."""
+        if theme == self._theme_active and not initial:
+            return
+        old = self._theme_active
+        globals().update(ui_theme.PALETTES[theme])   # used by widgets created from now on
+        self._theme_active = theme
+        self._setup_styles()                          # ttk styles
+        self.option_add("*TCombobox*Listbox.background", PANEL)
+        self.option_add("*TCombobox*Listbox.foreground", TEXT)
+        self.option_add("*TCombobox*Listbox.selectBackground", ACCENT)
+        self.option_add("*TCombobox*Listbox.selectForeground", ON_ACCENT)
+        if old != theme:
+            ui_theme.recolor_tree(self, ui_theme.color_map(old, theme))
+            for combo in (self._format_cb, self._when_done_cb):
+                try:  # drop-down list already created: recolour it too
+                    popdown = self.tk.eval(f"ttk::combobox::PopdownWindow {combo}")
+                    self.tk.eval(f"{popdown}.f.l configure -background {PANEL} -foreground {TEXT} "
+                                 f"-selectbackground {ACCENT} -selectforeground {ON_ACCENT}")
+                except tk.TclError:
+                    pass
+        self._refresh_speed_label()
+        ui_theme.set_windows_title_bar(self, theme == ui_theme.THEME_DARK)
+
+    def _on_theme_changed(self) -> None:
+        """Theme chosen in the menu."""
+        self._apply_theme(ui_theme.resolve(self._theme_choice.get()))
+        self._save_settings()
+
+    def _follow_system_theme(self) -> None:
+        """'Automatic': check the system theme every minute."""
+        if self._closed:
+            return
+        if self._theme_choice.get() == ui_theme.THEME_AUTO:
+            self._apply_theme(ui_theme.resolve(ui_theme.THEME_AUTO))
+        self.after(60_000, self._follow_system_theme)
+
+    # ------------------------------------------------------------------ account / start-up notice
+
+    def _open_account_dialog(self) -> None:
+        """File → Account & cookies…"""
+        gui_dialogs.AccountDialog(self, self._palette(), DIALOG_FONTS, self._on_cookies_saved)
+
+    def _on_cookies_saved(self) -> None:
+        """cookies.json changed: make the next requests use the new values."""
+        from src.cli import downloader as cli_downloader  # pylint: disable=import-outside-toplevel
+        from src import general_utils  # pylint: disable=import-outside-toplevel
+
+        general_utils._cached_cookies = None  # pylint: disable=protected-access
+        cli_downloader._nhentai_session = None  # pylint: disable=protected-access
+        self._append_log(_ts(), "Account", "cookies.json saved: the new values are used from the next gallery.")
+
+    def show_startup_notice(self) -> bool:
+        """Show the disclaimer unless it was snoozed; False when the user declines."""
+        if not gui_dialogs.disclaimer_needed(self._settings):
+            return True
+        return gui_dialogs.show_disclaimer(
+            self, self._palette(), DIALOG_FONTS, self._settings, self._save_settings, startup=True,
+        )
 
     # ------------------------------------------------------------------ UI
 
@@ -528,27 +773,7 @@ class EHentaiGUI(tk.Tk):
         self._format_cb.pack(side="left", padx=(0, PAD*2))
         self._format_cb.bind("<<ComboboxSelected>>", self._on_format_changed)
 
-        # Sequential rename (01..N) once an album is complete
-        self._rename_var = BooleanVar(value=bool(self._settings.get("auto_rename", RENAME_SEQUENTIAL)))
-        self._rename_btn = tk.Button(
-            hdr_right,
-            bg=PANEL, font=FONT_SMALL,
-            relief="flat", cursor="hand2",
-            command=self._toggle_rename,
-        )
-        self._rename_btn.pack(side="left", padx=(0, PAD*2))
-        self._refresh_rename_btn()
-
-        # Pack each completed album into a .cbz (comic book archive) and delete the images
-        self._cbz_var = BooleanVar(value=bool(self._settings.get("cbz_archive", CREATE_CBZ)))
-        self._cbz_btn = tk.Button(
-            hdr_right,
-            bg=PANEL, font=FONT_SMALL,
-            relief="flat", cursor="hand2",
-            command=self._toggle_cbz,
-        )
-        self._cbz_btn.pack(side="left", padx=(0, PAD*2))
-        self._refresh_cbz_btn()
+        # Auto Rename / CBZ archive / Speed / When done / Theme live in the "Settings" menu
 
         ttk.Separator(self, orient="horizontal").pack(side="top", fill="x")
 
@@ -560,7 +785,6 @@ class EHentaiGUI(tk.Tk):
         done_box = tk.Frame(sb, bg=BG)
         done_box.pack(side="right", padx=(0, PAD))
         tk.Label(done_box, text="When done:", bg=BG, fg=TEXT_SEC, font=FONT_SMALL).pack(side="left")
-        self._when_done_var = StringVar(value=WHEN_DONE_NOTHING)
         self._when_done_cb = ttk.Combobox(
             done_box, textvariable=self._when_done_var, values=WHEN_DONE_OPTIONS,
             state="readonly", width=14, font=FONT_SMALL,
@@ -569,26 +793,16 @@ class EHentaiGUI(tk.Tk):
         self._when_done_cb.bind("<<ComboboxSelected>>", self._on_when_done_changed)
         self._when_done_dialog = None
 
-        # Speed slider (right side): fewer requests per second = less risk of an IP ban
-        speed_box = self._speed_box = tk.Frame(sb, bg=BG)
-        speed_box.pack(side="right", padx=PAD)
-        tk.Label(speed_box, text="Speed:", bg=BG, fg=TEXT_SEC, font=FONT_SMALL).pack(side="left")
-        self._speed_var = tk.IntVar(value=throttle.get_speed())
-        self._speed_scale = tk.Scale(
-            speed_box, from_=throttle.MIN_SPEED, to=throttle.MAX_SPEED, resolution=1,
-            orient="horizontal", showvalue=False, length=110, variable=self._speed_var,
-            bg=BG, highlightthickness=0, troughcolor=BORDER, activebackground=ACCENT2,
-            sliderlength=18, width=12, command=self._on_speed_changed,
-        )
-        self._speed_scale.pack(side="left", padx=(6, 6))
-        self._speed_lbl = tk.Label(speed_box, bg=BG, fg=TEXT, font=FONT_SMALL, width=16, anchor="w")
-        self._speed_lbl.pack(side="left")
-        self._refresh_speed_label()
+        # Current speed (changed from Settings → Speed): fewer requests = less risk of a ban
+        self._speed_lbl = tk.Label(sb, bg=BG, fg=TEXT, font=FONT_SMALL, anchor="w", cursor="hand2")
+        self._speed_lbl.pack(side="right", padx=PAD)
+        self._speed_lbl.bind("<Button-1>", lambda e: self._speed_menu.tk_popup(e.x_root, e.y_root))
+        self._speed_box = self._speed_lbl
 
         # Shown only during an IP ban: skip the wait after switching IP (e.g. with a VPN)
         self._resume_btn = tk.Button(
             sb, text="▶  Resume now",
-            bg=WARNING, fg="white", activebackground=ERROR, activeforeground="white",
+            bg=WARNING, fg=ON_ACCENT, activebackground=ERROR, activeforeground=ON_ACCENT,
             font=FONT_SMALL, relief="flat", cursor="hand2", padx=8, pady=0,
             command=self._resume_after_ban,
         )
@@ -612,14 +826,14 @@ class EHentaiGUI(tk.Tk):
         self._tab_batch  = ttk.Frame(self._nb, style="TFrame")
         self._tab_retry  = ttk.Frame(self._nb, style="TFrame")
 
-        self._nb.add(self._tab_single, text="  🔗  Single Download  ")
-        self._nb.add(self._tab_batch,  text="  📋  Batch Download   ")
-        self._nb.add(self._tab_retry,  text="  🔄  Retry Failed     ")
+        self._nb.add(self._tab_single, text="🔗  Single Download")
+        self._nb.add(self._tab_batch,  text="📋  Batch Download")
+        self._nb.add(self._tab_retry,  text="🔄  Retry Failed")
 
         # "Open Downloads" sits on the tab-bar row, right-aligned: always visible, whatever tab is open
         self._open_downloads_btn = tk.Button(
             self, text="📁  Open Downloads",
-            bg=ACCENT, fg="white", activebackground=ACCENT2, activeforeground="white",
+            bg=ACCENT, fg=ON_ACCENT, activebackground=ACCENT2, activeforeground=ON_ACCENT,
             font=FONT_SMALL, relief="flat", cursor="hand2", padx=10, pady=2,
             command=self._open_downloads_folder,
         )
@@ -646,7 +860,7 @@ class EHentaiGUI(tk.Tk):
                   style="Head.TLabel").grid(
                       row=0, column=0, columnspan=3,
                       padx=PAD, pady=(PAD, 4), sticky="w")
-        ttk.Label(card, text="Paste an E-Hentai / ExHentai gallery URL and click Start.",
+        ttk.Label(card, text="Paste an E-Hentai / ExHentai / nhentai gallery URL and click Start.",
                   style="Sub.TLabel").grid(
                       row=1, column=0, columnspan=3,
                       padx=PAD, pady=(0, PAD), sticky="w")
@@ -710,7 +924,7 @@ class EHentaiGUI(tk.Tk):
         self._batch_editor = Text(
             editor_frame,
             font=FONT_MONO, bg=PANEL, fg=TEXT,
-            insertbackground=TEXT, selectbackground="#D5E8F5",
+            insertbackground=TEXT, selectbackground=SELECT_BG,
             relief="flat", bd=0, height=6,
             wrap="none", undo=True,
         )
@@ -724,22 +938,22 @@ class EHentaiGUI(tk.Tk):
         self._load_urls_txt()
         self._batch_editor.tag_configure(
             "queued_batch_line",
-            background="#F4F6F8",
+            background=LINE_QUEUED_BG,
         )
         self._batch_editor.tag_configure(
             "active_batch_line",
-            background="#D6EAF8",
-            foreground="#154360",
+            background=LINE_ACTIVE_BG,
+            foreground=LINE_ACTIVE_FG,
         )
         self._batch_editor.tag_configure(
             "done_batch_line",
-            background="#E8F8F5",
-            foreground="#145A32",
+            background=LINE_DONE_BG,
+            foreground=LINE_DONE_FG,
         )
         self._batch_editor.tag_configure(
             "fail_batch_line",
-            background="#FADBD8",
-            foreground="#78281F",
+            background=LINE_FAIL_BG,
+            foreground=LINE_FAIL_FG,
         )
         # Later states must win over "queued" when both are on a line
         for tag in ("active_batch_line", "done_batch_line", "fail_batch_line"):
@@ -809,7 +1023,7 @@ class EHentaiGUI(tk.Tk):
 
         self._retry_list = Text(
             list_frame,
-            font=FONT_MONO, bg="#FAFAFA", fg=TEXT,
+            font=FONT_MONO, bg=RETRY_BG, fg=TEXT,
             relief="flat", bd=0, height=6,
             state="disabled", wrap="none",
         )
@@ -821,18 +1035,18 @@ class EHentaiGUI(tk.Tk):
 
         self._retry_list.tag_configure(
             "active_batch_line",
-            background="#D6EAF8",
-            foreground="#154360",
+            background=LINE_ACTIVE_BG,
+            foreground=LINE_ACTIVE_FG,
         )
         self._retry_list.tag_configure(
             "done_batch_line",
-            background="#E8F8F5",
-            foreground="#145A32",
+            background=LINE_DONE_BG,
+            foreground=LINE_DONE_FG,
         )
         self._retry_list.tag_configure(
             "fail_batch_line",
-            background="#FADBD8",
-            foreground="#78281F",
+            background=LINE_FAIL_BG,
+            foreground=LINE_FAIL_FG,
         )
 
         # Counter label
@@ -959,9 +1173,9 @@ class EHentaiGUI(tk.Tk):
         self._log_box.tag_configure("ts",             foreground=MUTED)
         self._log_box.tag_configure("event",          foreground=ACCENT)
         self._log_box.tag_configure("ok",             foreground=SUCCESS)
-        self._log_box.tag_configure("success_banner", foreground="#1A6B3A",  font=("Consolas", 9, "bold"))
-        self._log_box.tag_configure("warn_banner",    foreground="#B8580A",  font=("Consolas", 9, "bold"))
-        self._log_box.tag_configure("warn_url",       foreground="#B8580A",  font=("Consolas", 9, "bold"))
+        self._log_box.tag_configure("success_banner", foreground=OK_BANNER,  font=FONT_MONO_BOLD)
+        self._log_box.tag_configure("warn_banner",    foreground=WARN_BANNER,  font=FONT_MONO_BOLD)
+        self._log_box.tag_configure("warn_url",       foreground=WARN_BANNER,  font=FONT_MONO_BOLD)
         self._log_box.tag_configure("warn_item",      foreground=WARNING)
 
     def _on_window_resize(self, event=None) -> None:
@@ -1144,7 +1358,7 @@ class EHentaiGUI(tk.Tk):
     # ------------------------------------------------------------------ speed / IP ban
 
     def _on_speed_changed(self, _value=None) -> None:
-        """Slider moved: apply the new speed at once (parallel downloads from the next album)."""
+        """Speed chosen in the menu: apply it at once (parallel downloads from the next album)."""
         level = int(self._speed_var.get())
         if level == throttle.get_speed():
             return
@@ -1162,9 +1376,11 @@ class EHentaiGUI(tk.Tk):
         """Show the speed name, in orange when it is risky for an IP ban."""
         level = throttle.get_speed()
         workers = throttle.SPEED_LEVELS[level][2]
+        if not hasattr(self, "_speed_lbl"):
+            return
         self._speed_lbl.configure(
-            text=f"{throttle.speed_name(level)} ({workers}×)",
-            fg=WARNING if level >= 5 else TEXT,
+            text=f"Speed: {level}x {throttle.speed_name(level)} ({workers} parallel)",
+            fg=WARNING if level >= 5 else TEXT_SEC, bg=BG,
         )
 
     def _on_ban_changed(self, until: float) -> None:
@@ -1188,8 +1404,10 @@ class EHentaiGUI(tk.Tk):
         if remaining <= 0:
             self._end_ban_display("▶ Ban expired: downloads resumed.")
             return
+        source = throttle.ban_source()
+        what = "IP banned by E-Hentai" if source == "E-Hentai" else f"Blocked by {source} (too many requests)"
         self._status_var.set(
-            f"⏸ IP banned by E-Hentai: paused, resuming in {remaining // 60}:{remaining % 60:02d} "
+            f"⏸ {what}: paused, resuming in {remaining // 60}:{remaining % 60:02d} "
             "(changed IP with a VPN? press Resume now)"
         )
         self._ban_tick_job = self.after(1000, self._ban_tick)
@@ -1249,12 +1467,15 @@ class EHentaiGUI(tk.Tk):
 
     def _save_settings(self) -> None:
         """Save the current GUI choices so they are restored at the next start."""
-        data = {
-            "image_format": self._format_var.get(),
+        data = self._settings  # keeps the other keys too (theme, start-up notice, ...)
+        if hasattr(self, "_format_var"):
+            data["image_format"] = self._format_var.get()
+        data.update({
             "auto_rename": bool(self._rename_var.get()),
             "cbz_archive": bool(self._cbz_var.get()),
             "speed": int(self._speed_var.get()),
-        }
+            "theme": self._theme_choice.get(),
+        })
         path = Path(SETTINGS_FILE)
         tmp = path.with_name(f"{path.name}.part")
         try:
@@ -1263,31 +1484,18 @@ class EHentaiGUI(tk.Tk):
         except OSError as err:
             logging.warning(f"Could not save {SETTINGS_FILE}: {err}")
 
-    def _toggle_rename(self) -> None:
-        """Flip the 'Auto Rename' option (rename images 01…N when an album is complete)."""
-        self._rename_var.set(not self._rename_var.get())
-        self._refresh_rename_btn()
+    def _on_rename_changed(self) -> None:
+        """Settings → Auto Rename toggled."""
         self._save_settings()
+        state = "ON" if self._rename_var.get() else "OFF"
+        self._append_log(_ts(), "Settings", f"Auto Rename {state}: images renamed 01…N when an album is complete."
+                         if state == "ON" else "Auto Rename OFF: images keep their download names.")
 
-    def _refresh_rename_btn(self) -> None:
-        """Update the 'Auto Rename' button text and colour to match its state."""
-        if self._rename_var.get():
-            self._rename_btn.configure(text="🔢  Auto Rename: ON", fg=ACCENT, activeforeground=ACCENT2)
-        else:
-            self._rename_btn.configure(text="🔢  Auto Rename: OFF", fg=MUTED, activeforeground=TEXT_SEC)
-
-    def _toggle_cbz(self) -> None:
-        """Flip the 'CBZ archive' option."""
-        self._cbz_var.set(not self._cbz_var.get())
-        self._refresh_cbz_btn()
+    def _on_cbz_changed(self) -> None:
+        """Settings → CBZ archive toggled."""
         self._save_settings()
-
-    def _refresh_cbz_btn(self) -> None:
-        """Update the 'CBZ archive' button text and colour to match its state."""
-        if self._cbz_var.get():
-            self._cbz_btn.configure(text="📚  CBZ archive: ON", fg=ACCENT, activeforeground=ACCENT2)
-        else:
-            self._cbz_btn.configure(text="📚  CBZ archive: OFF", fg=MUTED, activeforeground=TEXT_SEC)
+        self._append_log(_ts(), "Settings", "CBZ archive ON: each completed album is saved as a .cbz file."
+                         if self._cbz_var.get() else "CBZ archive OFF: albums are saved as folders of images.")
 
     def _get_selected_format(self) -> str:
         """Map the combobox label to the internal format name (auto / original / jpg / png / webp)."""
@@ -1326,7 +1534,7 @@ class EHentaiGUI(tk.Tk):
         else:
             failed_map = {}
 
-        from downloader import gallery_name
+        from src.cli.downloader import gallery_name
 
         def is_image_item(item: str) -> bool:
             """True for a missing image (picture page URL or '(page NN)'), False for an album error."""
@@ -1399,7 +1607,8 @@ class EHentaiGUI(tk.Tk):
     def _on_when_done_changed(self, _event=None) -> None:
         """Confirm the choice in the log."""
         choice = self._when_done_var.get()
-        self._when_done_cb.selection_clear()
+        if hasattr(self, "_when_done_cb"):
+            self._when_done_cb.selection_clear()
         if choice == WHEN_DONE_NOTHING:
             self._append_log(_ts(), "When done", "Nothing will happen when the downloads finish.")
             return
@@ -1519,9 +1728,8 @@ class EHentaiGUI(tk.Tk):
         # Verify / retry follow lines by number: the list must not change while they run
         self._batch_editor.configure(state="normal" if editor_editable else state)
         self._format_cb.configure(state="readonly" if state == "normal" else "disabled")
-        # The rename option is read when a download starts: lock it while one is running
-        self._rename_btn.configure(state=state)
-        self._cbz_btn.configure(state=state)
+        # Auto Rename / CBZ are read when a download starts: lock them while one is running
+        self._set_menu_options_state(state)
 
     def _clear_log(self) -> None:
         """Empty the log box (session.log is not touched)."""
@@ -1605,7 +1813,7 @@ class EHentaiGUI(tk.Tk):
 
     def _editor_entries(self) -> list[tuple[int, str, str]]:
         """Return (line number, url, gallery name) for every link line of the batch editor."""
-        from downloader import parse_url_line, remember_gallery_name
+        from src.cli.downloader import parse_url_line, remember_gallery_name
         entries = []
         lines = self._batch_editor.get("1.0", "end-1c").splitlines()
         for line_no, line in enumerate(lines, start=1):
@@ -1620,7 +1828,7 @@ class EHentaiGUI(tk.Tk):
 
         Returns "removed", "kept" (user chose to keep them, or none found) or "cancel".
         """
-        from downloader import find_duplicates, format_url_line, gallery_name
+        from src.cli.downloader import find_duplicates, format_url_line, gallery_name
         entries = self._editor_entries()
         pairs = find_duplicates([url for _, url, _ in entries])
         if not pairs:
@@ -1748,8 +1956,8 @@ class EHentaiGUI(tk.Tk):
     def _load_retry_list(self) -> None:
         """Collect retry candidates and show them (read-only)."""
         # Import lazily to avoid triggering heavy imports at startup
-        from retry import collect_retry_urls
-        from downloader import format_url_line
+        from src.cli.retry import collect_retry_urls
+        from src.cli.downloader import format_url_line
         urls = collect_retry_urls()
         self._retry_list.configure(state="normal")
         self._retry_list.delete("1.0", END)
@@ -1772,7 +1980,7 @@ class EHentaiGUI(tk.Tk):
             "Clear failed_downloads.txt and the queue?\nThis cannot be undone.",
         ):
             return
-        from downloader import save_failed_urls
+        from src.cli.downloader import save_failed_urls
         save_failed_urls([])
         self._load_retry_list()
         self._status_var.set("Retry queue cleared.")
@@ -1897,7 +2105,7 @@ class EHentaiGUI(tk.Tk):
         Claimed lines get a "task_<id>" tag. Links that were never verified also go to the
         parallel link check. A second link to a gallery already in this batch is skipped.
         """
-        from downloader import gallery_key, gallery_status, parse_url_line
+        from src.cli.downloader import gallery_key, gallery_status, parse_url_line
         from src.general_utils import validate_gallery_url
 
         lines = self._batch_editor.get("1.0", "end-1c").splitlines()
@@ -2025,7 +2233,7 @@ class EHentaiGUI(tk.Tk):
 
     def _offer_sort_by_size(self) -> None:
         """After a verification, offer to move the galleries with fewer images to the top."""
-        from downloader import gallery_status, parse_url_line, sort_lines_by_size
+        from src.cli.downloader import gallery_status, parse_url_line, sort_lines_by_size
         lines = self._batch_editor.get("1.0", "end-1c").splitlines()
         sorted_lines = sort_lines_by_size(lines)
         if sorted_lines is None:
@@ -2056,7 +2264,7 @@ class EHentaiGUI(tk.Tk):
         """Start re-downloading every album in the failed queue in a background thread."""
         if self._guard_running():
             return
-        from retry import collect_retry_urls
+        from src.cli.retry import collect_retry_urls
         urls = collect_retry_urls()
         if not urls:
             messagebox.showinfo(
@@ -2101,7 +2309,7 @@ class EHentaiGUI(tk.Tk):
         failed_by_url: dict[str, list[str]] = {}
         append_session_banner(f"SINGLE DOWNLOAD START: {url}")
         try:
-            from downloader import download_album
+            from src.cli.downloader import download_album
             lm = GUILiveManager(log_queue=self._q, mode="single")
             ok, failed_items = download_album(
                 url, lm, image_format=image_format, rename_sequential=rename, create_cbz=cbz,
@@ -2147,7 +2355,7 @@ class EHentaiGUI(tk.Tk):
         failed_by_url: dict[str, list[str]] = {}
         done_count = 0
         try:
-            from downloader import download_album, format_url_line, gallery_name, update_failed_url
+            from src.cli.downloader import download_album, format_url_line, gallery_name, update_failed_url
 
             append_session_banner(f"BATCH DOWNLOAD START ({self._batch_total} albums)")
 
@@ -2218,7 +2426,7 @@ class EHentaiGUI(tk.Tk):
         and skipped by the downloader; a good one gets its title and image count at once.
         """
         try:
-            from downloader import courtesy_pause, format_url_line, verify_gallery
+            from src.cli.downloader import courtesy_pause, format_url_line, verify_gallery
             from src.general_utils import create_session
 
             session = create_session()
@@ -2255,7 +2463,7 @@ class EHentaiGUI(tk.Tk):
         ok_count = bad_count = 0
         domains: dict[str, int] = {}
         try:
-            from downloader import courtesy_pause, format_url_line, verify_gallery
+            from src.cli.downloader import courtesy_pause, format_url_line, verify_gallery
             from src.general_utils import create_session
 
             session = create_session()
@@ -2292,8 +2500,8 @@ class EHentaiGUI(tk.Tk):
         success = True
         failed_by_url: dict[str, list[str]] = {}
         try:
-            from retry import collect_retry_urls
-            from downloader import download_album, gallery_name, save_failed_urls
+            from src.cli.retry import collect_retry_urls
+            from src.cli.downloader import download_album, gallery_name, save_failed_urls
 
             retry_urls = collect_retry_urls()
             total = len(retry_urls)
@@ -2364,6 +2572,11 @@ def main() -> None:
     os.chdir(script_dir)
 
     app = EHentaiGUI()
+    app.update_idletasks()
+    if not app.show_startup_notice():
+        app._closed = True  # pylint: disable=protected-access
+        app.destroy()
+        return
     app.mainloop()
 
 

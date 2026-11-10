@@ -204,3 +204,5 @@ session.log
 session.log.*
 Downloads/
 temp/
+# temporary files written while saving (settings.json.part, cookies.json.part, URLs.txt.part, images)
+*.part

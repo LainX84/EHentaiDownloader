@@ -1,5 +1,8 @@
 {
   "ipb_member_id": "",
   "ipb_pass_hash": "",
-  "igneous": ""
+  "igneous": "",
+  "nhentai": {
+    "api_key": ""
+  }
 }

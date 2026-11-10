@@ -5,15 +5,16 @@ and download the associated content. It manages the entire download process by
 leveraging asynchronous operations, allowing for efficient handling of multiple URLs.
 
 Usage:
-    To run the module, execute the script directly. It will process URLs listed in
-    'URLs.txt' and log the session activities in 'session.log'.
+    From the project folder run:  python -m src.cli.main
+    It processes the URLs listed in 'URLs.txt' and logs the session in 'session.log'.
 """
 
 import asyncio
+import os
 import sys
 from pathlib import Path
 
-from downloader import (
+from src.cli.downloader import (
     _dedupe_keep_order,
     download_album,
     initialize_managers,
@@ -22,6 +23,7 @@ from downloader import (
     remember_gallery_name,
     save_failed_urls,
 )
+from src.cli import PROJECT_ROOT
 from src.config import URLS_FILE
 from src.file_utils import append_session_banner, read_file, write_file
 from src.general_utils import clear_terminal
@@ -53,7 +55,7 @@ async def main() -> None:
     """Run the script."""
     # Clear the terminal and record session start
     clear_terminal()
-    append_session_banner("BATCH CLI START (main.py)")
+    append_session_banner("BATCH CLI START (src.cli.main)")
 
     # Read and process URLs, ignoring empty lines
     # URLs.txt is optional: create it empty on first run
@@ -75,10 +77,11 @@ async def main() -> None:
 
     # Clear URLs file
     write_file(URLS_FILE)
-    append_session_banner(f"BATCH CLI END (main.py) - Failed: {len(failed_urls)}")
+    append_session_banner(f"BATCH CLI END (src.cli.main) - Failed: {len(failed_urls)}")
 
 
 if __name__ == "__main__":
+    os.chdir(PROJECT_ROOT)  # Downloads/, URLs.txt, ... live in the project folder
     try:
         asyncio.run(main())
 

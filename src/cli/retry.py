@@ -2,15 +2,20 @@
 
 This script reloads failed album URLs from failed_downloads.txt,
 retries downloads, and updates the queue with only unresolved failures.
+
+Usage (from the project folder):  python -m src.cli.retry
 """
 
 from __future__ import annotations
+
+import os
 
 import asyncio
 import sys
 from urllib.parse import urlparse
 
-from downloader import download_album, initialize_managers, load_failed_urls, save_failed_urls
+from src.cli.downloader import download_album, initialize_managers, load_failed_urls, save_failed_urls
+from src.cli import PROJECT_ROOT
 from src.file_utils import rotate_session_log
 from src.general_utils import clear_terminal
 
@@ -38,7 +43,7 @@ def _is_album_url(url: str) -> bool:
     if not parsed.netloc:
         return False
 
-    # E-Hentai and ExHentai album pages are under /g/<id>/<token>/
+    # E-Hentai / ExHentai album pages are under /g/<id>/<token>/, nhentai ones under /g/<id>/
     return "/g/" in parsed.path
 
 
@@ -85,6 +90,7 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
+    os.chdir(PROJECT_ROOT)  # Downloads/, failed_downloads.txt, ... live in the project folder
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
