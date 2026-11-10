@@ -14,8 +14,8 @@ import webbrowser
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
-from src import cookie_import
-from src.config import DISCLAIMER_SNOOZE_DAYS, ISSUES_URL, PROJECT_URL, UPSTREAM_URL
+from src import cookie_import, paths
+from src.config import APP_VERSION, DISCLAIMER_SNOOZE_DAYS, ISSUES_URL, PROJECT_URL, UPSTREAM_URL
 
 APP_NAME = "EHentai Downloader"
 
@@ -166,7 +166,7 @@ def show_license(root, palette: dict, fonts: dict) -> None:
              font=fonts["head"]).pack(anchor="w", pady=(0, 4))
     tk.Label(body, text=f"Fork of {UPSTREAM_URL}, distributed under the same license.",
              bg=palette["BG"], fg=palette["TEXT_SEC"], font=fonts["small"]).pack(anchor="w", pady=(0, 8))
-    license_path = Path(__file__).resolve().parent.parent / "LICENSE"
+    license_path = paths.resource("LICENSE")
     try:
         license_text = license_path.read_text(encoding="utf-8")
     except OSError:
@@ -177,11 +177,18 @@ def show_license(root, palette: dict, fonts: dict) -> None:
 
 def show_about(root, palette: dict, fonts: dict) -> None:
     """Name, credits, AI notice, links and versions."""
-    win = _dialog(root, f"About {APP_NAME}", palette, 560, 400)
+    win = _dialog(root, f"About {APP_NAME}", palette, 600, 460)
     body = tk.Frame(win, bg=palette["BG"])
     body.pack(fill="both", expand=True, padx=20, pady=16)
-    tk.Label(body, text=f"⬇  {APP_NAME}", bg=palette["BG"], fg=palette["TEXT"],
-             font=fonts["title"]).pack(anchor="w")
+    top = tk.Frame(body, bg=palette["BG"])
+    top.pack(fill="x")
+    try:
+        win.logo = tk.PhotoImage(file=str(paths.resource("assets/logo_small.png")))
+        tk.Label(top, image=win.logo, bg=palette["BG"]).pack(side="left", padx=(0, 14))
+    except (tk.TclError, OSError):
+        pass
+    tk.Label(top, text=f"{APP_NAME}\nversion {APP_VERSION}", bg=palette["BG"], fg=palette["TEXT"],
+             font=fonts["title"], justify="left").pack(side="left", anchor="w")
     lines = (
         "Downloads E-Hentai, ExHentai and nhentai galleries as image folders or CBZ archives.",
         "",
@@ -190,6 +197,7 @@ def show_about(root, palette: dict, fonts: dict) -> None:
         "Developed and modified with the help of Claude AI (Anthropic).",
         "Free software under the GPL-3.0 license, provided as is, without warranty.",
         "",
+        f"Data folder: {paths.app_dir()}",
         f"Python {platform.python_version()} · Tk {root.tk.call('info', 'patchlevel')} · {platform.system()} {platform.release()}",
     )
     tk.Label(body, text="\n".join(lines), bg=palette["BG"], fg=palette["TEXT_SEC"], font=fonts["small"],

@@ -1,8 +1,10 @@
+<p align="center"><img src="assets/logo.png" alt="EHentai Downloader logo" width="220"></p>
+
 # E-Hentai Downloader
 
 > A Python tool to download E-Hentai, ExHentai and nhentai galleries, with a simple desktop GUI and a command-line interface.
 
-![Demo](assets/demo.gif)
+![Demo](assets/demo.jpg)
 
 > This project is a fork of [Lysagxra/EHentaiDownloader](https://github.com/Lysagxra/EHentaiDownloader), extended with a GUI, image format conversion, sequential renaming, smarter retries and more. It is distributed under the same license (GPL-3.0).
 
@@ -14,6 +16,7 @@
 - **Menu bar** (File / Settings / Help) that follows the theme, also on Windows; Auto Rename, CBZ archive, Speed (1x–5x), When done and Theme moved there.
 - **Light, dark and automatic theme**, platform fonts, tabs of equal size.
 - **Account & cookies** window that writes `cookies.json` from cookies pasted from the browser or a `cookies.txt`.
+- **Ready-to-use apps** for Windows, macOS and Linux (no Python needed), built automatically for every release.
 - **Start-up notice** (disclaimer) with *Don't show this again for 30 days*; *Help* menu with GitHub, license and about.
 
 ---
@@ -47,7 +50,27 @@
 
 ---
 
-## Requirements
+## Download (no Python needed)
+
+Ready-to-use versions are attached to every [release](https://github.com/LainX84/EHentaiDownloader/releases/latest):
+
+| System | File | How to start |
+| :--- | :--- | :--- |
+| **Windows** 10/11 (64-bit) | `EHentaiDownloader-<version>-windows-x64.zip` | Unzip anywhere and double-click `EHentaiDownloader.exe`. Windows SmartScreen may warn about an unknown publisher (the app is not signed): *More info → Run anyway*. |
+| **macOS** Apple Silicon (M1…) | `EHentaiDownloader-<version>-macos-arm64.zip` | Unzip and move `EHentaiDownloader.app` to *Applications*. The app is not signed by Apple: the first time, right-click it → *Open* → *Open* (or *System Settings → Privacy & Security → Open Anyway*). |
+| **macOS** Intel | `EHentaiDownloader-<version>-macos-x64.zip` | As above. |
+| **Linux** x64 | `EHentaiDownloader-<version>-linux-x64.tar.gz` | `tar xzf EHentaiDownloader-*-linux-x64.tar.gz`, then run `EHentaiDownloader/EHentaiDownloader`. |
+
+Where the app keeps its files (`Downloads/`, `temp/`, `URLs.txt`, `cookies.json`, `settings.json`, `session.log`):
+
+- **Windows / Linux**: in the folder of the executable ("portable": move the folder and everything moves with it). If that folder can't be written (e.g. *Program Files*), `EHentaiDownloader` in your home folder is used.
+- **macOS**: `~/EHentaiDownloader` (in your home folder).
+
+*Help → About* shows the folder in use. ImageMagick is optional for the packaged app too (Pillow is included).
+
+---
+
+## Requirements (to run from the source code)
 
 - **Python 3.10+** (with Tkinter, included in the official Windows/macOS installers; on Linux install it with the system package, e.g. `sudo apt install python3-tk` on Debian/Ubuntu, `sudo dnf install python3-tkinter` on Fedora)
 - Python packages: `beautifulsoup4`, `requests`, `rich`, `Pillow`
@@ -55,7 +78,7 @@
 
 ---
 
-## Installation
+## Installation (from the source code)
 
 ```bash
 git clone https://github.com/LainX84/EHentaiDownloader.git
@@ -103,7 +126,9 @@ Only if nhentai ever showed the program a Cloudflare check (*"Just a moment…"*
 
 ## Usage
 
-### 1. GUI
+The program is meant to be used through the **GUI**: every feature is there (menus, account cookies, themes, pause, speed, progress). The command line is kept only as an optional, legacy mode for whoever prefers it.
+
+### 1. GUI (recommended)
 
 Double-click **`EHentaiDownloader.pyw`** (Windows opens it without a console window), or run:
 
@@ -133,7 +158,9 @@ python EHentaiDownloader.pyw
 | **Retry Failed** tab | Albums from `failed_downloads.txt`, in the same column format; press *Retry Failed* to try them again. |
 | **Log** | Live events; *Open Log File* opens `session.log`. |
 
-### 2. Command line
+### 2. Command line (optional, legacy)
+
+A minimal mode without a window, kept for whoever wants it (scripts, servers without a desktop). It downloads from **E-Hentai, ExHentai and nhentai** exactly like the GUI, with the same files and settings, but it has none of the GUI tools (menus, Account & cookies window, pause, live speed change): settings come from `src/config.py` and `cookies.json`, and the speed is `DEFAULT_SPEED`. New features are developed for the GUI first.
 
 Run these from the project folder (the one with `EHentaiDownloader.pyw`):
 
@@ -150,7 +177,7 @@ python -m src.cli.retry
 
 The GUI and the command line share the same `URLs.txt` and `failed_downloads.txt`.
 
-The CLI uses `DEFAULT_IMAGE_FORMAT`, `RENAME_SEQUENTIAL` and `CREATE_CBZ` from `src/config.py`.
+The CLI uses `DEFAULT_IMAGE_FORMAT`, `RENAME_SEQUENTIAL`, `CREATE_CBZ` and `DEFAULT_SPEED` from `src/config.py` (not the GUI choices saved in `settings.json`).
 
 ### Link lists format
 
@@ -183,6 +210,24 @@ A gallery link always ends with a **10-character token** (`/g/<number>/<token>/`
 | **JPG** | Everything converted to JPEG (animations keep only the first frame). |
 | **PNG** | Everything converted to PNG (animations keep only the first frame). |
 | **WEBP** | Everything converted to WebP. |
+
+### Building the app yourself
+
+```bash
+pip install -r requirements.txt pyinstaller
+python tools/build.py
+```
+
+The archive for your system is written to `release/` (PyInstaller can only build for the system it runs on).
+
+**Publishing a release** (maintainers): set `APP_VERSION` in `src/config.py`, commit, then push a tag with the same version:
+
+```bash
+git tag v2.0.0
+git push origin v2.0.0
+```
+
+The GitHub workflow `.github/workflows/release.yml` builds Windows, macOS (Apple Silicon and Intel) and Linux on GitHub's servers and attaches the four archives to a new release with generated notes. *Actions → Build release → Run workflow* makes a test build without publishing (the archives can be downloaded from the run page).
 
 ---
 
@@ -258,8 +303,11 @@ EHentaiDownloader/
 ├── EHentaiDownloader.pyw    # GUI (double-click to start on Windows)
 ├── cookies.example.json     # Template for your ExHentai (and optional nhentai) cookies
 ├── .pylintrc                # Pylint settings used by the GitHub Actions check
+├── .github/workflows/       # pylint.yml (code check), release.yml (builds the apps)
+├── tools/build.py           # Builds the ready-to-use app with PyInstaller
+├── tools/make_icons.py      # Makes logo / icons (assets/) from assets/logo_source.jpg
 ├── requirements.txt
-├── assets/                  # README images
+├── assets/                  # README images, logo and app icons ("EHD" letters at 16–32 px)
 └── src/
     ├── cli/
     │   ├── downloader.py    # CLI: single gallery + download logic shared with the GUI
@@ -270,6 +318,7 @@ EHentaiDownloader/
     ├── general_utils.py     # HTTP session, cookies, page fetching with retries & diagnostics
     ├── nhentai.py           # nhentai: link check, gallery data (API v2 / page), image servers
     ├── throttle.py          # Speed levels (request pacing) and temporary IP-ban / rate-limit pause
+    ├── paths.py             # Data folder and bundled files (source code or packaged app)
     ├── ui_theme.py          # Light / dark / automatic theme, platform fonts
     ├── gui_dialogs.py       # Start-up notice, Account & cookies, License, About windows
     ├── cookie_import.py     # Reads pasted cookies / cookies.txt, writes cookies.json

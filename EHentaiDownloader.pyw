@@ -54,7 +54,7 @@ from src.config import (
     SESSION_LOG,
     SETTINGS_FILE,
 )
-from src import gui_dialogs, throttle, ui_theme
+from src import gui_dialogs, paths, throttle, ui_theme
 from src.config import ISSUES_URL, PROJECT_URL
 from src.file_utils import append_session_banner, append_session_log
 
@@ -368,6 +368,12 @@ class EHentaiGUI(tk.Tk):
         super().__init__()
 
         self.title("EHentai Downloader")
+        try:  # window / taskbar icon: the system picks the size (16/32 px = "EHD" letters)
+            self._icons = [tk.PhotoImage(file=str(paths.resource(f"assets/{name}")))
+                           for name in ("icon.png", "icon_32.png", "icon_16.png")]
+            self.iconphoto(True, *self._icons)
+        except (tk.TclError, OSError):
+            pass
         self.configure(bg=BG)
         self.minsize(760, 520)
         self.resizable(True, True)
@@ -739,9 +745,14 @@ class EHentaiGUI(tk.Tk):
         hdr.pack(fill="x", side="top")
         hdr.pack_propagate(False)
 
-        tk.Label(hdr, text="⬇  EHentai Downloader",
+        # Small logo next to the title
+        try:
+            self._header_logo = tk.PhotoImage(file=str(paths.resource("assets/icon_small.png")))
+        except (tk.TclError, OSError):
+            self._header_logo = None
+        tk.Label(hdr, text="  EHentai Downloader", image=self._header_logo, compound="left",
                  bg=PANEL, fg=TEXT, font=FONT_TITLE).pack(
-                     side="left", padx=PAD*2, pady=12)
+                     side="left", padx=PAD*2, pady=8)
 
         hdr_right = tk.Frame(hdr, bg=PANEL)
         hdr_right.pack(side="right", padx=PAD*2)
@@ -2568,8 +2579,8 @@ def _ts() -> str:
 def main() -> None:
     # Make sure we run from the project root so relative paths work
     """Start the GUI from the project folder so relative paths (Downloads, URLs.txt, ...) resolve correctly."""
-    script_dir = Path(__file__).resolve().parent
-    os.chdir(script_dir)
+    # (or, for the packaged app, next to the executable / in ~/EHentaiDownloader: see src/paths.py)
+    paths.use_app_dir()
 
     app = EHentaiGUI()
     app.update_idletasks()
