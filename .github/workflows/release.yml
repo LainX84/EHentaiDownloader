@@ -3,6 +3,11 @@ name: Build release
 # Builds the ready-to-use app for Windows, macOS (Apple Silicon + Intel) and Linux.
 #  - Push a tag "v<version>" (e.g. v2.0.0): the archives are attached to a new GitHub release.
 #  - "Run workflow" from the Actions tab: test build, archives downloadable from the run page.
+#
+# The macOS Apple Silicon build is optional: GitHub's arm64 runners are sometimes out of
+# capacity and the job is never picked up. In that case the release is still published
+# with the other archives; the arm64 one can be added later by re-running the failed job
+# and uploading its archive to the release by hand.
 
 on:
   push:
@@ -23,11 +28,14 @@ jobs:
             label: Windows x64
           - os: macos-latest
             label: macOS Apple Silicon
+            optional: true          # see the note at the top
           - os: macos-15-intel
             label: macOS Intel
           - os: ubuntu-22.04        # older glibc: the binary also runs on older distributions
             label: Linux x64
     runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.optional == true }}
+    timeout-minutes: 45
 
     steps:
       - uses: actions/checkout@v5
@@ -50,7 +58,7 @@ jobs:
         run: python tools/build.py
 
       - name: Upload archive
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ${{ matrix.os }}
           path: release/*
@@ -59,14 +67,32 @@ jobs:
   release:
     name: Publish GitHub release
     needs: build
-    if: github.ref_type == 'tag'
+    # !cancelled(): run even if the optional arm64 build failed; the check below
+    # still stops the release if one of the required archives is missing.
+    if: ${{ !cancelled() && github.ref_type == 'tag' }}
     runs-on: ubuntu-latest
     steps:
       - name: Download archives
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           path: release
           merge-multiple: true
+
+      - name: Check required archives
+        shell: bash
+        run: |
+          ls -l release
+          missing=0
+          for pattern in "*-windows-x64.zip" "*-macos-x64.zip" "*-linux-x64.tar.gz"; do
+            if ! compgen -G "release/$pattern" > /dev/null; then
+              echo "::error::Missing required archive: $pattern"
+              missing=1
+            fi
+          done
+          if ! compgen -G "release/*-macos-arm64.zip" > /dev/null; then
+            echo "::warning::macOS Apple Silicon archive missing: the release is published without it"
+          fi
+          exit $missing
 
       - name: Create release
         uses: softprops/action-gh-release@v2
