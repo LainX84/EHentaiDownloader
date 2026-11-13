@@ -9,7 +9,7 @@ The result goes to release/ (one archive per system, users don't need Python):
     macOS     EHentaiDownloader-<version>-macos-<arch>.zip      EHentaiDownloader.app
     Linux     EHentaiDownloader-<version>-linux-x64.tar.gz      EHentaiDownloader
 
-Each archive also holds README.md, LICENSE and cookies.example.json.
+Each archive also holds README.md, CHANGELOG.md, LICENSE and cookies.example.json.
 The GitHub workflow .github/workflows/release.yml runs this script on Windows, macOS
 (Apple Silicon and Intel) and Linux when a tag v<version> is pushed.
 
@@ -34,7 +34,7 @@ NAME = "EHentaiDownloader"
 DIST = ROOT / "dist"
 BUILD = ROOT / "build"
 RELEASE = ROOT / "release"
-EXTRA_FILES = ("README.md", "LICENSE", "cookies.example.json")
+EXTRA_FILES = ("README.md", "CHANGELOG.md", "LICENSE", "cookies.example.json")
 
 
 def app_version() -> str:

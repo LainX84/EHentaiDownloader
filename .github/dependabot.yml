@@ -1,0 +1,17 @@
+# Weekly pull requests when a dependency (or a GitHub action) has a new version,
+# security fixes included. Merge them after the "Lint & tests" check passes.
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]

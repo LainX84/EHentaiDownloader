@@ -21,6 +21,7 @@ from requests import Response, Session
 from src.config import (
     CREATE_CBZ,
     DOWNLOAD_FOLDER,
+    EHENTAI_SUBFOLDER,
     IMAGE_FETCH_RETRIES,
     IMAGE_SERVER_RETRIES,
     MAX_WORKERS,
@@ -62,6 +63,14 @@ class AlbumDownloader(CbzArchiveMixin):
     This class fetches the album's pages, extracts image links, and downloads the images
     while tracking progress.
     """
+
+    # Sub-folder of Downloads that receives the finished albums of this site
+    SITE_FOLDER = EHENTAI_SUBFOLDER
+
+    @property
+    def site_download_folder(self) -> Path:
+        """Folder of the completed albums of this site: Downloads/<site>."""
+        return Path(DOWNLOAD_FOLDER) / self.SITE_FOLDER
 
     def __init__(
         self,
@@ -122,11 +131,11 @@ class AlbumDownloader(CbzArchiveMixin):
         """
         self.extra_info: dict[str, str] = getattr(self, "extra_info", {})
         self.index_width = max(2, len(str(self.total_images))) if self.total_images > 0 else 3
-        # Albums are downloaded into TEMP_FOLDER and moved to DOWNLOAD_FOLDER only once complete.
+        # Albums are downloaded into TEMP_FOLDER and moved to Downloads/<site> only once complete.
         # A partial download is resumed from wherever it already is: first the temp folder,
-        # then Downloads (albums started before the temp folder existed are finished in place).
+        # then Downloads/<site> and Downloads (albums started by older versions are finished in place).
         self.download_path = ""
-        for base in (TEMP_FOLDER, DOWNLOAD_FOLDER):
+        for base in (TEMP_FOLDER, self.site_download_folder, DOWNLOAD_FOLDER):
             for name in (self.clean_album_name, self.album_name):
                 candidate = Path(base) / sanitize_directory_name(name)
                 if candidate.is_dir() and any(candidate.iterdir()):
@@ -501,11 +510,11 @@ class AlbumDownloader(CbzArchiveMixin):
         return total_failed_downloads
 
     def _finalize_successful_download(self) -> None:
-        """Move the complete album to Downloads/<clean title> (out of the temp folder)."""
+        """Move the complete album to Downloads/<site>/<clean title> (out of the temp folder)."""
         try:
             current_path = Path(self.download_path)
             clean_name = sanitize_directory_name(self.clean_album_name)
-            target_path = Path(DOWNLOAD_FOLDER) / clean_name
+            target_path = self.site_download_folder / clean_name
 
             if current_path.resolve() == target_path.resolve():
                 self.live_manager.update_log(
@@ -888,6 +897,8 @@ class AlbumDownloader(CbzArchiveMixin):
                 "Download",
                 f"Downloaded page {self.format_page_index(page_idx)}/{self.total_images}: {target_filename}",
             )
+            if hasattr(self.live_manager, "count_downloaded_image"):  # GUI session counter
+                self.live_manager.count_downloaded_image()
             _mark_done()
 
             # Polite sleep between tasks in each thread

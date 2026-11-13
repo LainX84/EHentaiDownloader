@@ -2,32 +2,52 @@
 
 AlbumDownloader (and NHentaiAlbumDownloader) inherit these methods. They use these
 attributes of the downloader: album_name, clean_album_name, total_images, url,
-download_path, extra_info, live_manager, and its _scan_local_pages / _part_path /
-_discard helpers.
+download_path, extra_info, live_manager, site_download_folder, and its _scan_local_pages /
+_part_path / _discard helpers.
 """
 
 import os
 import zipfile
 from pathlib import Path
 
-from src.config import DOWNLOAD_FOLDER
-from src.file_utils import sanitize_directory_name
+from src.config import CBZ_COMIC_INFO, DOWNLOAD_FOLDER
+from src.file_utils import MAX_NAME_BYTES, sanitize_directory_name
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".avif"}
 
+# Whether ComicInfo.xml is written into new CBZ files. The GUI sets it from
+# Settings → "ComicInfo.xml in CBZ"; the CLI uses CBZ_COMIC_INFO from src/config.py.
+_comic_info_enabled = CBZ_COMIC_INFO
+
+
+def set_comic_info(enabled: bool) -> None:
+    """Turn the ComicInfo.xml file inside new CBZ archives on or off."""
+    global _comic_info_enabled  # pylint: disable=global-statement
+    _comic_info_enabled = bool(enabled)
+
+
+def comic_info_enabled() -> bool:
+    """True if new CBZ archives get a ComicInfo.xml."""
+    return _comic_info_enabled
+
 
 class CbzArchiveMixin:  # pylint: disable=too-few-public-methods
-    """Pack a finished album into "Downloads/<title>.cbz" (with ComicInfo.xml)."""
+    """Pack a finished album into "Downloads/<site>/<title>.cbz" (ComicInfo.xml only if enabled)."""
 
-    def _cbz_path(self) -> Path:
-        """Return "Downloads/<full gallery title>.cbz" (shortened only if the path would be too long)."""
-        folder = Path(DOWNLOAD_FOLDER)
+    def _cbz_path(self, folder: Path | None = None) -> Path:
+        """Return "Downloads/<site>/<full gallery title>.cbz" (shortened only if the name is too long).
+
+        folder: put the archive there instead (used to find archives of older versions).
+        """
+        folder = self.site_download_folder if folder is None else folder
         title = self.clean_album_name or self.album_name or "album"
-        # 255 chars is the file-name limit; on Windows also stay below the 260-char MAX_PATH
+        # 255 is the file-name limit (bytes on Linux / macOS); on Windows also stay below
+        # the 260-char MAX_PATH
         room = 255 - len(".cbz")
         if os.name == "nt":
             room = min(room, 259 - len(str(folder.resolve())) - 1 - len(".cbz"))
-        name = sanitize_directory_name(title, max_length=max(20, room)) or "album"
+        name = sanitize_directory_name(title, max_length=max(20, room),
+                                       max_bytes=MAX_NAME_BYTES - len(".cbz")) or "album"
         return folder / f"{name}.cbz"
 
     @staticmethod
@@ -42,9 +62,10 @@ class CbzArchiveMixin:  # pylint: disable=too-few-public-methods
     def _find_complete_cbz(self) -> Path | None:
         """Return the album's CBZ in Downloads if it exists and holds every page, else None.
 
-        Also recognizes archives made by earlier versions inside "Downloads/<album>/".
+        Also recognizes archives made by earlier versions: "Downloads/<title>.cbz" and
+        "Downloads/<album>/*.cbz".
         """
-        candidates = [self._cbz_path()]
+        candidates = [self._cbz_path(), self._cbz_path(Path(DOWNLOAD_FOLDER))]
         old_folder = Path(DOWNLOAD_FOLDER) / sanitize_directory_name(self.clean_album_name)
         if old_folder.is_dir():
             candidates.extend(sorted(old_folder.glob("*.cbz")))
@@ -113,7 +134,8 @@ class CbzArchiveMixin:  # pylint: disable=too-few-public-methods
                     ext = ".jpg" if src.suffix.lower() == ".jpeg" else src.suffix.lower()
                     zf.write(src, arcname=f"{idx:0{width}d}{ext}")
                     sources.append(src)
-                zf.writestr("ComicInfo.xml", self._comic_info_xml(len(pages)))
+                if _comic_info_enabled:
+                    zf.writestr("ComicInfo.xml", self._comic_info_xml(len(pages)))
 
             with zipfile.ZipFile(part) as zf:
                 bad = zf.testzip()

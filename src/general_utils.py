@@ -61,6 +61,36 @@ def validate_gallery_url(url: str) -> str | None:
     return None
 
 
+# Gallery links inside any text (a web page, a chat message, a list copied from a forum...)
+_LINK_IN_TEXT_RE = re.compile(
+    r"https?://(?:www\.)?(?:"
+    r"(?P<eh>(?:e-hentai|exhentai)\.org)/g/(?P<eh_id>\d+)/(?P<token>[^/\s?#\"'<>]+)"
+    r"|nhentai\.net/g/(?P<nh_id>\d+)"
+    r")",
+    re.IGNORECASE,
+)
+
+
+def extract_gallery_links(text: str) -> list[str]:
+    """Return every E-Hentai / ExHentai / nhentai gallery link found in text, in order, once each.
+
+    Links are returned in their canonical form (https://e-hentai.org/g/<id>/<token>/,
+    https://nhentai.net/g/<id>/): an nhentai reader link (/g/<id>/<page>/) becomes the
+    gallery link. Malformed tokens are kept as they are, so the usual link check reports them.
+    """
+    links: list[str] = []
+    seen: set[str] = set()
+    for match in _LINK_IN_TEXT_RE.finditer(text or ""):
+        if match.group("eh"):
+            link = f"https://{match.group('eh').lower()}/g/{match.group('eh_id')}/{match.group('token')}/"
+        else:
+            link = f"https://nhentai.net/g/{match.group('nh_id')}/"
+        if link not in seen:
+            seen.add(link)
+            links.append(link)
+    return links
+
+
 def _compact_text(value: str, limit: int = 240) -> str:
     """Normalize whitespace and shorten diagnostic text, removing unprintable characters."""
     cleaned = "".join(ch if ch.isprintable() or ch in " \t\n" else " " for ch in value)

@@ -201,7 +201,10 @@ def parse_url_line(line: str) -> tuple[str, str]:
         return "", ""
 
     parts = text.split("|")
-    if len(parts) >= 4 and parts[0].strip().upper() in _STATUS_VALUES and "://" in parts[-1]:
+    # The first column alone identifies a table line: a bare URL never starts with GOOD/BAD.
+    # (Do not require '://' in the last column, or a BAD line holding a broken link such as
+    # "BAD | - | (invalid link) | v" would be read back as the link "BAD".)
+    if len(parts) >= 4 and parts[0].strip().upper() in _STATUS_VALUES:
         url = parts[-1].strip()
         status = parts[0].strip().upper()
         count = parts[1].strip()
@@ -236,6 +239,41 @@ def format_url_line(url: str, name: str = "") -> str:
     images = str(info["images"]) if info.get("images") else "-"
     title = info.get("title") or f"({info.get('problem') or 'not checked'})"
     return f"{status:<4} | {images:>4} | {title} | {url}"
+
+
+def estimate_list_images(lines: list[str]) -> dict:
+    """Estimate how many images the link lines will download, from what the list says.
+
+    Only verified lines ("GOOD | 24 | Title | link") carry an image count. A second link
+    to the same gallery is counted once (the batch skips it). Returns a dict with:
+        images     – sum of the known image counts
+        known      – GOOD galleries with a known image count
+        unverified – links not checked yet (or GOOD with unknown size)
+        bad        – links found BAD by the check (they will not be downloaded)
+    """
+    result = {"images": 0, "known": 0, "unverified": 0, "bad": 0}
+    seen: set[str] = set()
+    for line in lines:
+        text = line.strip()
+        if not text or text.startswith("#"):
+            continue
+        parts = text.split("|")
+        if len(parts) >= 4 and parts[0].strip().upper() in _STATUS_VALUES:
+            url, status, count = parts[-1].strip(), parts[0].strip().upper(), parts[1].strip()
+        else:
+            url, status, count = text.split()[0], "", ""
+        key = gallery_key(url)
+        if key in seen:
+            continue
+        seen.add(key)
+        if status == "BAD":
+            result["bad"] += 1
+        elif status == "GOOD" and count.isdigit() and int(count) > 0:
+            result["images"] += int(count)
+            result["known"] += 1
+        else:
+            result["unverified"] += 1
+    return result
 
 
 def sort_lines_by_size(lines: list[str]) -> list[str] | None:
@@ -379,6 +417,15 @@ def courtesy_pause() -> None:
     time.sleep(random.uniform(0.5, 1.5))  # noqa: S311
 
 
+def _is_retryable_link(url: str) -> bool:
+    """True if the text looks like a web link at all.
+
+    Text that is not even a link (e.g. a stray "v" typed into the list) can never be
+    downloaded, so it is not kept in failed_downloads.txt for Retry Failed.
+    """
+    return "://" in (url or "")
+
+
 def load_failed_entries() -> list[tuple[str, str]]:
     """Load (url, name) pairs from failed_downloads.txt."""
     if not Path(FAILED_URLS_FILE).exists():
@@ -386,7 +433,7 @@ def load_failed_entries() -> list[tuple[str, str]]:
     entries = []
     for line in read_file(FAILED_URLS_FILE):
         url, name = parse_url_line(line)
-        if url:
+        if _is_retryable_link(url):
             remember_gallery_name(url, name)
             entries.append((url, name))
     return entries
@@ -399,7 +446,7 @@ def load_failed_urls() -> list[str]:
 
 def save_failed_urls(urls: list[str]) -> None:
     """Persist failed album URLs for future retries, each followed by its gallery name if known."""
-    normalized = _dedupe_keep_order([url for url in urls if url.strip()])
+    normalized = _dedupe_keep_order([url for url in urls if _is_retryable_link(url.strip())])
     content = "\n".join(format_url_line(url) for url in normalized)
     if content:
         content += "\n"

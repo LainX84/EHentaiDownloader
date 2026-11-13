@@ -10,14 +10,17 @@
 
 ---
 
-## What's new
+## What's new in 2.0.1
 
-- **nhentai.net support** through the site's public API v2 (no account needed), with its 20-requests-per-minute limit respected and a pause with countdown (+10–15 s) when the site asks to slow down.
-- **Menu bar** (File / Settings / Help) that follows the theme, also on Windows; Auto Rename, CBZ archive, Speed (1x–5x), When done and Theme moved there.
-- **Light, dark and automatic theme**, platform fonts, tabs of equal size.
-- **Account & cookies** window that writes `cookies.json` from cookies pasted from the browser or a `cookies.txt`.
-- **Ready-to-use apps** for Windows, macOS and Linux (no Python needed), built automatically for every release.
-- **Start-up notice** (disclaimer) with *Don't show this again for 30 days*; *Help* menu with GitHub, license and about.
+- **One folder per site**: completed albums go to `Downloads/E-Hentai/` (e-hentai.org and exhentai.org) or `Downloads/nhentai/`.
+- **Add many links at once**: paste any text (a web page, a chat message, a forum post) into the batch list, or drag links / `.txt` files onto the window: only the gallery links are kept, and galleries already in the list are skipped. Optional **clipboard watcher** (*Settings → Watch clipboard for links*).
+- **Update check**: *Help → Check for updates now*, and a quiet check at start-up (at most once a day, can be turned off). The version is now shown next to the program name at the top of the window.
+- **ComicInfo.xml is optional** (*Settings → ComicInfo.xml in CBZ*, OFF by default).
+- **Batch list**: estimate of the images still to download; status bar counter of the images downloaded since the program was opened.
+- **Safe file names on every system**: the same rules on Windows, macOS and Linux (no `? * : " < > |`, no Windows device names like `CON`), and long Chinese / Japanese titles are shortened to fit the 255-byte limit of Linux and macOS.
+- Fixes for BAD lines of the link list and for the retry queue (text that is not a link is no longer kept).
+
+All changes, also of earlier versions: [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
@@ -27,13 +30,15 @@
 - 🎨 **Light, dark or automatic theme** (follows the Windows / macOS / Linux setting), from **Settings → Theme**.
 - 🧭 **Menu bar**: *File* (folders, log, account cookies), *Settings* (Auto Rename, CBZ, Speed, When done, Theme), *Help* (GitHub, report a problem, disclaimer, license, about).
 - 🖥️ **Desktop GUI** (Tkinter): single, batch and retry modes, live progress bars and a coloured log. Start it by double-clicking `EHentaiDownloader.pyw`.
+- 📥 **Quick link input**: paste text with links (Ctrl+V in the batch list), drag links or text files onto the window, or let the clipboard watcher collect every gallery link you copy.
+- 🗂️ **One folder per site**: `Downloads/E-Hentai/<title>` and `Downloads/nhentai/<title>` (or `.cbz`). Albums and archives made by older versions directly in `Downloads/` are still recognised.
 - 🖼️ **Image format conversion**
   - **AUTO** (default): static images are converted to `.jpg`, animated images (animated GIF/WebP) keep their original format.
   - **Native**: save exactly what the server sends.
   - **JPG / PNG / WEBP**: force one format (animations are reduced to their first frame).
   - Uses **ImageMagick** when installed, otherwise **Pillow**.
 - 🔢 **Sequential renaming**: when an album is fully downloaded, images are renamed `01…N`. The number of digits depends on the image count: up to 99 → 2 digits (`01`), up to 999 → 3 (`001`), up to 9999 → 4 (`0001`)… Toggle it in **Settings → Auto Rename**.
-- 📚 **CBZ archives** (optional): each completed album is saved as a single `Downloads/<gallery title>.cbz` (no album folder), pages named `01…N` (zero-padded so every reader shows them in order) plus a `ComicInfo.xml`; the images and their temp folder are deleted only after the archive is verified (if it cannot be made, the album is saved as a normal folder). Toggle it in **Settings → CBZ archive**. Albums already archived are skipped on later runs.
+- 📚 **CBZ archives** (optional): each completed album is saved as a single `Downloads/<site>/<gallery title>.cbz` (no album folder), pages named `01…N` (zero-padded so every reader shows them in order) plus, if you want, a `ComicInfo.xml` (**Settings → ComicInfo.xml in CBZ**, OFF by default); the images and their temp folder are deleted only after the archive is verified (if it cannot be made, the album is saved as a normal folder). Toggle it in **Settings → CBZ archive**. Albums already archived are skipped on later runs.
 - ✅ **Completeness check**: an album counts as complete only if every page is really on disk; otherwise it goes to the retry queue.
 - 🛟 **Resilient downloads**
   - Network errors, timeouts and HTTP 429/5xx are retried with increasing waits.
@@ -73,7 +78,7 @@ Where the app keeps its files (`Downloads/`, `temp/`, `URLs.txt`, `cookies.json`
 ## Requirements (to run from the source code)
 
 - **Python 3.10+** (with Tkinter, included in the official Windows/macOS installers; on Linux install it with the system package, e.g. `sudo apt install python3-tk` on Debian/Ubuntu, `sudo dnf install python3-tkinter` on Fedora)
-- Python packages: `beautifulsoup4`, `requests`, `rich`, `Pillow`
+- Python packages: `beautifulsoup4`, `requests`, `rich`, `Pillow`, and `tkinterdnd2` for drag and drop (optional: without it everything else works)
 - *(Optional)* [ImageMagick](https://imagemagick.org/script/download.php) in the system `PATH` for faster conversions
 
 ---
@@ -141,18 +146,20 @@ python EHentaiDownloader.pyw
 | **Image Format** | Output format for all downloads (see the table below). |
 | **File** menu | *Open Downloads folder*, *Open log file*, *Account & cookies…* (fills `cookies.json`, see above), *Exit*. |
 | **Settings → Auto Rename** | ON/OFF: rename images `01…N` when an album is complete. |
-| **Settings → CBZ archive** | ON/OFF: save each completed album as `Downloads/<gallery title>.cbz` instead of a folder of images. |
+| **Settings → CBZ archive** | ON/OFF: save each completed album as `Downloads/<site>/<gallery title>.cbz` instead of a folder of images. |
+| **Settings → ComicInfo.xml in CBZ** | ON/OFF (default OFF): also put a `ComicInfo.xml` (title, page count, source link) inside each new CBZ, for readers that use it. |
+| **Settings → Watch clipboard for links** | ON/OFF (default OFF): every gallery link you copy (also several at once, inside any text) is added to the batch list, skipping galleries already listed. Links copied before you turn it on are ignored. |
 | **Settings → Speed** | 1x Very slow … 5x Very fast (default 3x Normal), also shown bottom right (click it to change). Lower it if you get temporary IP bans. The request pace changes at once, the number of parallel downloads from the next album. |
 | **Settings → Theme** | *Automatic (system)*, *Light* or *Dark*; the window changes at once. *Automatic* follows the system setting (checked every minute). |
-| **Help** menu | GitHub page, *Report a problem* (GitHub issues), *Disclaimer*, *License* (GPL-3.0 and third-party software), *About*. |
+| **Help** menu | GitHub page, *Report a problem* (GitHub issues), *Check for updates now*, *Check for updates at start-up* (ON by default, at most once a day: one request to the GitHub API, nothing is downloaded or installed), *Disclaimer*, *License* (GPL-3.0 and third-party software), *About*. |
 | *Start-up notice* | At start the program shows the disclaimer (no warranty, use at your own risk, may stop working, developed with the help of Claude AI). *Decline and exit* closes the program; *Don't show this again for 30 days* hides it for a month (`DISCLAIMER_SNOOZE_DAYS`). |
 | **Pause / Resume** | Next to *Start Batch*, active while a download runs: no new request starts (images already being received finish), freeing the bandwidth. On pause `URLs.txt` is saved and the album in progress stays in `temp/`, so you can also close the program (no confirmation asked) or shut down the PC: the next *Start Batch* resumes from that album, skipping the pages already on disk. |
 | **When done** | Bottom right, and in **Settings → When done**: *Do nothing*, *Close program* or *Shut down PC* when all downloads are finished (handy for a list left running overnight). A 60 s countdown lets you cancel; the list and settings are saved first. You can change it while a download runs. It always starts as *Do nothing* (never remembered, so the PC is not switched off by surprise next time). |
 | **Resume now** | Appears in the status bar during a temporary IP ban: stop waiting after you changed IP (VPN). If the ban is still active the pause simply starts again. |
-| *Remembered settings* | Image Format, Auto Rename, CBZ archive, Speed, Theme and the start-up notice choice are saved in `settings.json` as soon as you change them and restored at the next start (delete the file to go back to the `src/config.py` defaults). |
-| **Open Downloads** | Button on the right of the tab bar (always visible, also in *File*): opens the `Downloads` folder. |
-| **Single Download** tab | Paste one gallery URL and press *Start Download*. |
-| **Batch Download** tab | Editor for `URLs.txt`: one URL per line, lines starting with `#` are skipped. *Start Batch* first checks for duplicates and malformed links. The list is saved automatically every few seconds; while the batch runs you can keep adding links at the bottom and they are queued too. Links never verified are checked online in parallel with the download (unreadable ones are skipped and go to *Retry Failed*). Downloaded lines turn green and disappear after ~45 s; *Clear All* asks for confirmation. |
+| *Remembered settings* | Image Format, Auto Rename, CBZ archive, ComicInfo.xml, clipboard watcher, update check, Speed, Theme and the start-up notice choice are saved in `settings.json` as soon as you change them and restored at the next start (delete the file to go back to the `src/config.py` defaults). |
+| **Open Downloads** | Button on the right of the tab bar (always visible, also in *File*): opens the `Downloads` folder (with the `E-Hentai` and `nhentai` sub-folders). |
+| **Single Download** tab | Paste one gallery URL and press *Start Download*. If *Paste* finds several links in the clipboard, it offers to add all of them to the batch list. |
+| **Batch Download** tab | Editor for `URLs.txt`: one URL per line, lines starting with `#` are skipped. **Ctrl+V** keeps only the gallery links of the copied text (a whole web page or message is fine) and adds those not already listed; you can also **drag** links, text or `.txt` files onto the window. *Start Batch* first checks for duplicates and malformed links. The list is saved automatically every few seconds; while the batch runs you can keep adding links at the bottom and they are queued too. Links never verified are checked online in parallel with the download (unreadable ones are skipped and go to *Retry Failed*). Downloaded lines turn green and disappear after ~45 s; *Clear All* asks for confirmation. |
 | **Duplicates** button | Finds links to the same gallery and, after confirmation, keeps one link per gallery. |
 | **Verify Links** button | Checks every link online without downloading: title, number of images and source site (e-hentai.org / exhentai.org). Rewrites each line as `GOOD/BAD | images | title | link`, then offers to sort the list so galleries with fewer images are downloaded first (links with problems go to the bottom). |
 | **Retry Failed** tab | Albums from `failed_downloads.txt`, in the same column format; press *Retry Failed* to try them again. |
@@ -177,7 +184,7 @@ python -m src.cli.retry
 
 The GUI and the command line share the same `URLs.txt` and `failed_downloads.txt`.
 
-The CLI uses `DEFAULT_IMAGE_FORMAT`, `RENAME_SEQUENTIAL`, `CREATE_CBZ` and `DEFAULT_SPEED` from `src/config.py` (not the GUI choices saved in `settings.json`).
+The CLI uses `DEFAULT_IMAGE_FORMAT`, `RENAME_SEQUENTIAL`, `CREATE_CBZ`, `CBZ_COMIC_INFO` and `DEFAULT_SPEED` from `src/config.py` (not the GUI choices saved in `settings.json`).
 
 ### Link lists format
 
@@ -220,11 +227,11 @@ python tools/build.py
 
 The archive for your system is written to `release/` (PyInstaller can only build for the system it runs on).
 
-**Publishing a release** (maintainers): set `APP_VERSION` in `src/config.py`, commit, then push a tag with the same version:
+**Publishing a release** (maintainers): set `APP_VERSION` in `src/config.py`, add a section to `CHANGELOG.md`, commit, then push a tag with the same version:
 
 ```bash
-git tag v2.0.0
-git push origin v2.0.0
+git tag v2.0.1
+git push origin v2.0.1
 ```
 
 The GitHub workflow `.github/workflows/release.yml` builds Windows, macOS (Apple Silicon and Intel) and Linux on GitHub's servers and attaches the four archives to a new release with generated notes. *Actions → Build release → Run workflow* makes a test build without publishing (the archives can be downloaded from the run page).
@@ -245,7 +252,8 @@ All settings are in [`src/config.py`](src/config.py):
 | `DEFAULT_SPEED` | `3` | Speed level on first start and for the CLI: 1 Very slow (4 s between page requests, 1 download), 2 Slow (2.5 s, 2), 3 Normal (1.5 s, 3), 4 Fast (0.8 s, 4), 5 Very fast (0.3 s, 5). |
 | `DEFAULT_IMAGE_FORMAT` | `auto` | Format used by the command-line scripts. |
 | `RENAME_SEQUENTIAL` | `True` | Rename images `01…N` when an album is complete (initial state of the GUI button on first start). |
-| `CREATE_CBZ` | `False` | Save each completed album as `Downloads/<gallery title>.cbz` instead of a folder (initial state of the GUI button on first start; also used by the CLI). |
+| `CREATE_CBZ` | `False` | Save each completed album as `Downloads/<site>/<gallery title>.cbz` instead of a folder (initial state of the GUI button on first start; also used by the CLI). |
+| `CBZ_COMIC_INFO` | `False` | Put a `ComicInfo.xml` inside each CBZ (initial state of the GUI option on first start; also used by the CLI). |
 | `IMAGE_SERVER_RETRIES` | `3` | Different image servers tried per page. |
 | `IMAGE_FETCH_RETRIES` | `3` | Attempts on the same image server before switching. |
 | `PAGE_FETCH_RETRIES` | `3` | Attempts for HTML pages on temporary errors. |
@@ -271,7 +279,7 @@ All settings are in [`src/config.py`](src/config.py):
 1. The link is checked (format), then the gallery page is read to get the title, the number of images and the list of gallery pages. If the requested site does not answer correctly, the other one (e-hentai.org ↔ exhentai.org) is tried; the log line `Source` says which one is used.
 2. For every image page, the direct image link is taken from the image viewer page.
 3. Images are downloaded in parallel into `temp/<album>/`, converted if needed, and saved as `NN_originalname.ext` while the album is in progress (each one through a `.part` temp file).
-4. When nothing failed and every page is on disk, the images are renamed `01…N` (if enabled) and the album is moved to `Downloads/<clean gallery title>`. With **CBZ archive** ON, the images are instead packed straight from `temp/` into `Downloads/<clean gallery title>.cbz` and the temp folder is removed.
+4. When nothing failed and every page is on disk, the images are renamed `01…N` (if enabled) and the album is moved to `Downloads/E-Hentai/<clean gallery title>` (`Downloads/nhentai/…` for nhentai). With **CBZ archive** ON, the images are instead packed straight from `temp/` into `Downloads/<site>/<clean gallery title>.cbz` and the temp folder is removed. Names follow the same rules on every system (characters not allowed on Windows become `_`, at most 255 bytes), so the `Downloads` folder can be copied anywhere.
 
 nhentai galleries work the same way, except steps 1–2: title, tags and the image path of every page come from a single request (API v2, or the gallery page as a fallback), so no per-image page is loaded; each image is taken directly from an image server (another mirror, or another file type if the site's one is wrong, is tried on failure).
 
@@ -300,13 +308,16 @@ nhentai galleries work the same way, except steps 1–2: title, tags and the ima
 
 ```
 EHentaiDownloader/
-├── EHentaiDownloader.pyw    # GUI (double-click to start on Windows)
+├── EHentaiDownloader.pyw    # Starts the GUI (double-click on Windows)
 ├── cookies.example.json     # Template for your ExHentai (and optional nhentai) cookies
 ├── .pylintrc                # Pylint settings used by the GitHub Actions check
-├── .github/workflows/       # pylint.yml (code check), release.yml (builds the apps)
+├── .github/workflows/       # pylint.yml (Pylint + tests), release.yml (builds the apps)
+├── .github/dependabot.yml   # Weekly pull requests for dependency / security updates
+├── tests/                   # pytest tests (run: python -m pytest)
 ├── tools/build.py           # Builds the ready-to-use app with PyInstaller
 ├── tools/make_icons.py      # Makes logo / icons (assets/) from assets/logo_source.jpg
 ├── requirements.txt
+├── CHANGELOG.md             # What changed in every version
 ├── assets/                  # README images, logo and app icons ("EHD" letters at 16–32 px)
 └── src/
     ├── cli/
@@ -321,6 +332,17 @@ EHentaiDownloader/
     ├── paths.py             # Data folder and bundled files (source code or packaged app)
     ├── ui_theme.py          # Light / dark / automatic theme, platform fonts
     ├── gui_dialogs.py       # Start-up notice, Account & cookies, License, About windows
+    ├── update_check.py      # Asks GitHub for the latest release
+    ├── gui/
+    │   ├── app.py           # Main window (EHentaiGUI), assembled from the modules below
+    │   ├── layout.py        # Styles, menu bar, theme, tabs, progress bars, log
+    │   ├── url_list.py      # Batch list editor, retry list, duplicates, estimates
+    │   ├── link_intake.py   # Paste many links, drag and drop, clipboard watcher
+    │   ├── workers.py       # Background download / link-check threads
+    │   ├── when_done.py     # End-of-download summary, close / shut down, exit
+    │   ├── updates.py       # Update check (Help menu)
+    │   ├── live_manager.py  # Progress / log messages from the threads to the window
+    │   └── style.py         # Colours, fonts, small widget helpers
     ├── cookie_import.py     # Reads pasted cookies / cookies.txt, writes cookies.json
     ├── crawler/
     │   ├── crawler.py       # Gallery parsing: title, image count, page list

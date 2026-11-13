@@ -24,18 +24,13 @@ git checkout -b bugfix/fix-issue-123
 
 ### 3. Follow the Code Style
 
-We use **Ruff** for linting and code formatting. Please make sure your code follows these rules, provided in `ruff.toml`:
-
-```toml
-[lint]
-select = ["ALL"]
-line-length = 88
-```
-
-Ensure all code passes Ruff checks before committing:
+We use **Pylint** with the settings in `.pylintrc` (the same check runs on GitHub for every push).
+User-facing text (windows, menus, log messages) is in English. The program must keep working on
+Windows, macOS and Linux.
 
 ```bash
-ruff check .
+pip install -r requirements.txt pylint pytest
+python -m pylint --disable=broad-exception-caught $(git ls-files '*.py' '*.pyw' ':!:tests/*')
 ```
 
 ### 4. Write Clear Commits
@@ -52,7 +47,11 @@ This function handles small matrices with optimized performance and includes com
 
 ### 5. Testing
 
-If applicable, write tests for your code. Make sure all existing and new tests pass before creating a pull request.
+Tests live in `tests/` and use **pytest** (no network access needed). Add tests for new logic and make sure everything passes before creating a pull request:
+
+```bash
+python -m pytest
+```
 
 ### 6. Pull Requests
 

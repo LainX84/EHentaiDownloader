@@ -24,6 +24,7 @@ from src.config import (
     MAX_WORKERS,
     NHENTAI_IMAGE_DELAY,
     NHENTAI_MAX_MIRRORS,
+    NHENTAI_SUBFOLDER,
     RENAME_SEQUENTIAL,
 )
 from src.file_utils import write_on_session_log
@@ -41,6 +42,8 @@ class _NotFound(Exception):
 
 class NHentaiAlbumDownloader(AlbumDownloader):
     """Download an nhentai.net gallery with the same output as an E-Hentai one."""
+
+    SITE_FOLDER = NHENTAI_SUBFOLDER
 
     def __init__(  # pylint: disable=super-init-not-called
         self,
@@ -231,6 +234,8 @@ class NHentaiAlbumDownloader(AlbumDownloader):
                 "Download",
                 f"Downloaded page {padded}/{self.total_images}: {self._get_target_filename(original_filename)}",
             )
+            if hasattr(self.live_manager, "count_downloaded_image"):  # GUI session counter
+                self.live_manager.count_downloaded_image()
             _mark_done()
             time.sleep(random.uniform(*NHENTAI_IMAGE_DELAY))  # noqa: S311
 

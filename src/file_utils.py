@@ -6,7 +6,6 @@ optional support for clearing the file.
 
 import datetime
 import logging
-import os
 import re
 import threading
 from pathlib import Path
@@ -85,31 +84,55 @@ def write_on_session_log(content: str) -> None:
     append_session_log("INFO", content)
 
 
-def sanitize_directory_name(directory_name: str, max_length: int = 150) -> str:
-    """Sanitize a given directory name and ensure it does not exceed filesystem limits.
+# Characters not allowed in Windows file names (also used on Linux / macOS, so a Downloads
+# folder can be copied to an exFAT / NTFS drive or a Windows PC without errors).
+_INVALID_NAME_CHARS = re.compile(r'[\\/:*?"<>|\x00-\x1f\x7f]')
+# Names Windows reserves for devices, with or without an extension ("CON", "nul.txt", "COM1").
+_RESERVED_NAMES = {"CON", "PRN", "AUX", "NUL"} | {f"{p}{i}" for p in ("COM", "LPT") for i in range(1, 10)}
+# File-name limit of ext4, APFS, Btrfs... is 255 *bytes* (a CJK character takes 3 in UTF-8);
+# NTFS allows 255 UTF-16 units, which is never fewer, so the byte limit works everywhere.
+MAX_NAME_BYTES = 255
 
-    Replace invalid characters with underscores and limit total length on Windows.
+
+def _truncate_utf8(text: str, max_bytes: int) -> str:
+    """Cut text to at most max_bytes when encoded as UTF-8, never splitting a character."""
+    encoded = text.encode("utf-8")
+    if len(encoded) <= max_bytes:
+        return text
+    return encoded[:max_bytes].decode("utf-8", errors="ignore")
+
+
+def _fit(text: str, max_length: int, max_bytes: int) -> str:
+    """Cut text to max_length characters and max_bytes UTF-8 bytes, without trailing dots/spaces."""
+    if len(text) > max_length:
+        text = text[:max_length]
+    return _truncate_utf8(text, max_bytes).rstrip(" ._")
+
+
+def sanitize_directory_name(directory_name: str, max_length: int = 150,
+                            max_bytes: int = MAX_NAME_BYTES) -> str:
+    """Make a gallery title safe as a file / folder name on Windows, macOS and Linux.
+
+    The same rules are used on every system: characters invalid on Windows become "_",
+    trailing dots and spaces are removed, Windows device names (CON, NUL, COM1...) get a "_"
+    and the name is shortened to max_length characters and max_bytes bytes (UTF-8).
     """
-    invalid_chars_dict = {
-        "nt": r'[\\/:*?"<>|\x00-\x1f]',  # Windows
-        "posix": r"[/:\x00]",            # macOS and Linux
-    }
-    invalid_chars = invalid_chars_dict.get(os.name, r'[\\/:*?"<>|\x00-\x1f]')
-    sanitized = re.sub(invalid_chars, "_", directory_name).strip(". ")
-
-    # Collapse multiple consecutive underscores or spaces
+    sanitized = _INVALID_NAME_CHARS.sub("_", directory_name or "")
+    # Collapse multiple consecutive underscores, drop leading / trailing dots, spaces, "_"
     sanitized = re.sub(r"_+", "_", sanitized).strip("._ ")
 
-    # Truncate length to avoid OS path limit errors (MAX_PATH / WinError 123)
-    if len(sanitized) > max_length:
+    if len(sanitized) > max_length or len(sanitized.encode("utf-8")) > max_bytes:
         suffix_match = re.search(r"(_g_\d+_[a-f0-9]+)$", sanitized)
-        if suffix_match:
+        if suffix_match:  # keep the "_g_<id>_<token>" ending that identifies the gallery
             suffix = suffix_match.group(1)
-            prefix_len = max(10, max_length - len(suffix) - 1)
-            sanitized = f"{sanitized[:prefix_len].rstrip(' ._')}_{suffix}"
+            prefix = _fit(sanitized[: -len(suffix)], max(10, max_length - len(suffix) - 1),
+                          max(10, max_bytes - len(suffix.encode("utf-8")) - 1))
+            sanitized = f"{prefix}_{suffix}"
         else:
-            sanitized = sanitized[:max_length].rstrip(" ._")
+            sanitized = _fit(sanitized, max_length, max_bytes)
 
+    if sanitized.split(".", 1)[0].upper() in _RESERVED_NAMES:
+        sanitized = f"{sanitized}_"
     return sanitized
 
 

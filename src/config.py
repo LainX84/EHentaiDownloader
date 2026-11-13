@@ -13,6 +13,9 @@ URLS_FILE = "URLs.txt"         # The file containing the list of URLs to process
 SESSION_LOG = "session.log"    # The file where session logs will be recorded.
 FAILED_URLS_FILE = "failed_downloads.txt"  # Albums to retry in next runs.
 SETTINGS_FILE = "settings.json"  # GUI choices remembered between runs (format, Auto Rename, CBZ).
+# Completed albums go into one sub-folder of DOWNLOAD_FOLDER per site:
+EHENTAI_SUBFOLDER = "E-Hentai"   # galleries from e-hentai.org and exhentai.org
+NHENTAI_SUBFOLDER = "nhentai"    # galleries from nhentai.net
 
 # ============================
 # Download Settings
@@ -24,6 +27,7 @@ DEFAULT_SPEED = 3     # Start speed: 1 Very slow, 2 Slow, 3 Normal, 4 Fast, 5 Ve
 DEFAULT_IMAGE_FORMAT = "auto"  # CLI default. Options: "auto", "original", "jpg", "png", "webp"
 RENAME_SEQUENTIAL = True  # Rename images to 01..N (padding sized on N) when the album is complete.
 CREATE_CBZ = False        # Save each completed album as "Downloads/<title>.cbz" instead of a folder of images.
+CBZ_COMIC_INFO = False    # Also put a ComicInfo.xml (title, page count, source link) inside each CBZ.
 IMAGE_SERVER_RETRIES = 3  # How many different image servers to try per page ("reload" link).
 IMAGE_FETCH_RETRIES = 3   # Attempts on the same image server before switching to another one.
 PAGE_FETCH_RETRIES = 3    # Attempts for gallery / picture HTML pages on transient errors.
@@ -40,7 +44,7 @@ NHENTAI_BLOCK_EXTRA_WAIT = (10, 15)  # Random extra seconds after the wait asked
 NHENTAI_BLOCK_DEFAULT_WAIT = 60      # Wait used when nhentai does not say how long (no Retry-After).
 NHENTAI_API_INTERVAL = 3.2      # Min. seconds between nhentai API requests (site limit: 20/min per IP).
 NHENTAI_API_INTERVAL_KEY = 1.4  # Same, with an nhentai API key in cookies.json (limit: 45/min per IP).
-APP_VERSION = "2.0.0"           # Shown in Help → About; release tags are v<APP_VERSION>.
+APP_VERSION = "2.0.1"           # Shown next to the program name and in Help → About; release tags are v<APP_VERSION>.
 PROJECT_URL = "https://github.com/LainX84/EHentaiDownloader"
 ISSUES_URL = f"{PROJECT_URL}/issues"
 UPSTREAM_URL = "https://github.com/Lysagxra/EHentaiDownloader"
