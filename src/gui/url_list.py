@@ -247,6 +247,7 @@ class UrlListMixin:  # pylint: disable=too-few-public-methods,no-member
         """
         from src.cli.downloader import gallery_key, gallery_status, parse_url_line
         from src.general_utils import validate_gallery_url
+        from src.gui.workers import site_lane
 
         lines = self._batch_editor.get("1.0", "end-1c").splitlines()
         # Lines already claimed (a task tag anywhere on the line, even if the user typed at its start)
@@ -282,22 +283,34 @@ class UrlListMixin:  # pylint: disable=too-few-public-methods,no-member
                 self._batch_editor.tag_add(f"task_{task_id}", f"{line_no}.0", f"{line_no}.end")
                 self._batch_editor.tag_add("queued_batch_line", f"{line_no}.0", f"{line_no}.end")
                 task = {"id": task_id, "url": url, "name": name, "dup": dup}
-                self._batch_queue.put(task)
+                lane = site_lane(url)
+                self._batch_queues[lane].put(task)
+                self._ensure_lane(lane)  # E-Hentai and nhentai download side by side
                 if valid and not dup and not gallery_status(url):
                     self._verify_queue.put(task)
 
     def _on_task_active(self, task_id: int, cur_idx: int, total_cnt: int, label: str) -> None:
-        """Highlight the line being downloaded."""
-        self._batch_editor.tag_remove("active_batch_line", "1.0", END)
+        """Highlight a line being downloaded (one per site can be active at the same time)."""
         line_no = self._task_line(task_id)
         if line_no:
             self._batch_editor.tag_remove("queued_batch_line", f"{line_no}.0", f"{line_no}.end")
             self._batch_editor.tag_add("active_batch_line", f"{line_no}.0", f"{line_no}.end")
             self._batch_editor.see(f"{line_no}.0")
-        self._status_var.set(f"[{cur_idx}/{total_cnt}] {label}")
+        self._active_tasks[task_id] = label
+        self._batch_counter = (cur_idx, total_cnt)
+        self._show_active_tasks()
+
+    def _show_active_tasks(self) -> None:
+        """Status bar: the galleries downloading right now."""
+        if not self._active_tasks:
+            return
+        cur_idx, total_cnt = getattr(self, "_batch_counter", (0, 0))
+        self._status_var.set(f"[{cur_idx}/{total_cnt}] " + "  ‖  ".join(self._active_tasks.values()))
 
     def _on_task_done(self, task_id: int, is_ok: bool) -> None:
         """Colour a finished line; downloaded lines are removed after DONE_LINE_REMOVE_DELAY."""
+        if self._active_tasks.pop(task_id, None) is not None:
+            self._show_active_tasks()
         line_no = self._task_line(task_id)
         if line_no:
             for tag in ("queued_batch_line", "active_batch_line", "done_batch_line", "fail_batch_line"):
@@ -339,6 +352,7 @@ class UrlListMixin:  # pylint: disable=too-few-public-methods,no-member
         for task_id in self._failed_task_ids:
             self._remove_task_line(task_id, save=False)
         self._failed_task_ids = []
+        self._active_tasks = {}
         self._batch_editor.tag_remove("queued_batch_line", "1.0", END)
         self._batch_editor.tag_remove("active_batch_line", "1.0", END)
         self._save_urls_txt(quiet=True)

@@ -19,12 +19,14 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
-          cache-dependency-path: requirements.txt
+          cache-dependency-path: |
+            requirements.txt
+            docker/requirements-web.txt
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install -r requirements.txt -r docker/requirements-web.txt  # web version: FastAPI, Uvicorn
           pip install pylint pytest
 
       - name: Pylint code check

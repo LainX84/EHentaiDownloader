@@ -1,0 +1,8 @@
+# Only what the Docker image needs (see docker/Dockerfile)
+*
+!src/
+!assets/
+!LICENSE
+!docker/requirements-web.txt
+**/__pycache__
+**/*.pyc

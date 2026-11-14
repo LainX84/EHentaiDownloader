@@ -3,17 +3,21 @@
 Two things live here:
 
 * Speed level (1 = very slow ... 5 = very fast). It sets the minimum pause between two
-  requests to the gallery / picture HTML pages (shared by all threads, so 5 workers do
-  not mean 5x the requests) and how many images are downloaded in parallel.
+  requests to the gallery / picture HTML pages (shared by all threads of the same site,
+  so 5 workers do not mean 5x the requests) and how many images are downloaded in
+  parallel. E-Hentai / ExHentai and nhentai are different servers with different rules:
+  each one has its own pace and its own ban, so a batch can download one gallery from
+  each site at the same time.
   The GUI slider changes it while a download runs: the pause applies immediately, the
   number of parallel downloads from the next album.
 
 * Temporary IP ban. When E-Hentai answers "This IP address has been temporarily banned
   ... The ban expires in X minutes and Y seconds", the ban time is read from the page,
-  a safety margin is added and every request waits until it is over. The current album
-  is paused, not skipped: nothing moves on to the next gallery while the ban lasts.
+  a safety margin is added and every E-Hentai request waits until it is over. The current
+  album is paused, not skipped: nothing moves on to the next gallery while the ban lasts
+  (nhentai downloads go on).
 
-* nhentai "Too Many Requests" (HTTP 429): same pause, for the time the site asks
+* nhentai "Too Many Requests" (HTTP 429): same pause, only for nhentai, for the time the site asks
   (Retry-After) plus a random 10-15 s margin (NHENTAI_BLOCK_EXTRA_WAIT).
 
 * User pause (GUI "Pause" button): no new request starts until "Resume"; images already
@@ -46,12 +50,17 @@ SPEED_LEVELS: dict[int, tuple[str, float, int]] = {
 MIN_SPEED = min(SPEED_LEVELS)
 MAX_SPEED = max(SPEED_LEVELS)
 
+# Sites with their own pacing and ban: E-Hentai / ExHentai (same servers, same IP ban)
+# and nhentai. Each site has its own clock, so the two can download side by side.
+SITE_EH = "E-Hentai"
+SITE_NH = "nhentai"
+SITES = (SITE_EH, SITE_NH)
+
 _lock = threading.Lock()
 _speed = DEFAULT_SPEED if DEFAULT_SPEED in SPEED_LEVELS else 3
-_next_slot = 0.0          # monotonic time of the next allowed page request
-_ban_until = 0.0          # monotonic time when the current ban (plus margin) ends
+_next_slot: dict[str, float] = {site: 0.0 for site in SITES}  # next allowed page request
+_ban_until: dict[str, float] = {site: 0.0 for site in SITES}  # end of the current ban (plus margin)
 _ban_listeners: list[Callable[[float], None]] = []
-_ban_source = "E-Hentai"  # site that asked for the current pause (shown by the GUI)
 _running = threading.Event()  # cleared = paused by the user
 _running.set()
 
@@ -84,15 +93,20 @@ def current_workers() -> int:
     return SPEED_LEVELS[_speed][2]
 
 
-def wait_turn() -> None:
-    """Block until this thread may send the next page request (global pacing)."""
-    global _next_slot
+def _site(site: str) -> str:
+    """Known site name (anything else counts as E-Hentai)."""
+    return site if site in _next_slot else SITE_EH
+
+
+def wait_turn(site: str = SITE_EH) -> None:
+    """Block until this thread may send the next page request to site (pacing per site)."""
+    site = _site(site)
     wait_while_paused()
     with _lock:
         interval = SPEED_LEVELS[_speed][1]
         now = time.monotonic()
-        slot = max(now, _next_slot)
-        _next_slot = slot + interval * random.uniform(0.8, 1.25)  # noqa: S311
+        slot = max(now, _next_slot[site])
+        _next_slot[site] = slot + interval * random.uniform(0.8, 1.25)  # noqa: S311
     delay = slot - now
     if delay > 0:
         time.sleep(delay)
@@ -141,54 +155,74 @@ def ban_seconds_from_page(text: str) -> int | None:
     return BAN_DEFAULT_WAIT
 
 
-def report_ban(seconds: float, source: str = "E-Hentai",
+def _latest_ban_end() -> float:
+    """Monotonic time when the last running ban ends (0 when no site is banned). Lock held."""
+    now = time.monotonic()
+    return max((until for until in _ban_until.values() if until > now), default=0.0)
+
+
+def report_ban(seconds: float, source: str = SITE_EH,
                margin_range: tuple[float, float] = BAN_EXTRA_WAIT) -> None:
-    """Record a ban / rate limit of the given length; every request waits until it ends
-    (plus a random margin). source names the site in the messages ("E-Hentai", "nhentai")."""
-    global _ban_until, _next_slot, _ban_source
+    """Record a ban / rate limit of the given length for one site ("E-Hentai", "nhentai").
+
+    Every request to that site waits until it ends (plus a random margin); the other site
+    goes on downloading.
+    """
+    site = _site(source)
     margin = random.uniform(*margin_range)  # noqa: S311
     until = time.monotonic() + seconds + margin
     with _lock:
-        is_new = until > _ban_until + 5  # several threads report the same ban at once
-        _ban_until = max(_ban_until, until)
-        _next_slot = max(_next_slot, _ban_until)
-        if is_new:
-            _ban_source = source
+        is_new = until > _ban_until[site] + 5  # several threads report the same ban at once
+        _ban_until[site] = max(_ban_until[site], until)
+        _next_slot[site] = max(_next_slot[site], _ban_until[site])
         listeners = list(_ban_listeners)
-        current_until = _ban_until
+        current_until = _ban_until[site]
+        latest = _latest_ban_end()
     if not is_new:
         return
     total = int(current_until - time.monotonic())
-    what = "IP temporarily banned" if source == "E-Hentai" else "Too many requests: blocked for a while"
+    what = "IP temporarily banned" if site == SITE_EH else "Too many requests: blocked for a while"
+    other = SITE_NH if site == SITE_EH else SITE_EH
     logging.warning(
-        f"{what} by {source}. Downloads paused for "
+        f"{what} by {site}. {site} downloads paused for "
         f"{total // 60}m {total % 60:02d}s ({seconds:.0f}s asked by the site + {margin:.0f}s margin), then "
-        "they resume from where they stopped. Tip: lower the speed, or switch IP with a VPN and press "
-        "'Resume now'."
+        f"they resume from where they stopped ({other} downloads are not affected). Tip: lower the speed, "
+        "or switch IP with a VPN and press 'Resume now'."
     )
     for callback in listeners:
         try:
-            callback(current_until)
+            callback(latest)
         except Exception:  # a GUI callback must never break a download thread
             pass
 
 
+def banned_sites() -> list[tuple[str, float]]:
+    """(site, seconds left) of every site that is paused by a ban right now."""
+    now = time.monotonic()
+    with _lock:
+        return [(site, until - now) for site, until in _ban_until.items() if until > now]
+
+
 def ban_source() -> str:
-    """Site that asked for the current pause ("E-Hentai" or "nhentai")."""
-    return _ban_source
+    """Site of the ban that lasts longest ("E-Hentai" or "nhentai"); "" when none."""
+    sites = banned_sites()
+    return max(sites, key=lambda item: item[1])[0] if sites else ""
 
 
-def ban_remaining() -> float:
-    """Seconds left before the current ban ends (0 when not banned)."""
-    return max(0.0, _ban_until - time.monotonic())
+def ban_remaining(site: str | None = None) -> float:
+    """Seconds left before the ban of site ends; with no site, of the longest ban (0 = none)."""
+    now = time.monotonic()
+    if site is None:
+        return max(0.0, max(_ban_until.values()) - now)
+    return max(0.0, _ban_until[_site(site)] - now)
 
 
 def clear_ban() -> None:
-    """Forget the current ban (e.g. the user switched IP with a VPN)."""
-    global _ban_until, _next_slot
+    """Forget every current ban (e.g. the user switched IP with a VPN)."""
     with _lock:
-        _ban_until = 0.0
-        _next_slot = 0.0
+        for site in SITES:
+            _ban_until[site] = 0.0
+            _next_slot[site] = 0.0
         listeners = list(_ban_listeners)
     logging.info("Ban wait cancelled by the user: downloads resume now.")
     for callback in listeners:
@@ -198,10 +232,10 @@ def clear_ban() -> None:
             pass
 
 
-def wait_while_banned() -> None:
-    """Block while a ban is active (checks every second, so 'Resume now' is quick)."""
+def wait_while_banned(site: str = SITE_EH) -> None:
+    """Block while site is banned (checks every second, so 'Resume now' is quick)."""
     while True:
-        remaining = ban_remaining()
+        remaining = ban_remaining(site)
         if remaining <= 0:
             return
         time.sleep(min(1.0, remaining))

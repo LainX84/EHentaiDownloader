@@ -384,9 +384,9 @@ def fetch_page(
         banned = False
 
         for attempt_idx, current_url in enumerate(urls_to_try):
-            # Global pacing: wait out an IP ban, then respect the speed level
-            throttle.wait_while_banned()
-            throttle.wait_turn()
+            # E-Hentai pacing: wait out an IP ban, then respect the speed level
+            throttle.wait_while_banned(throttle.SITE_EH)
+            throttle.wait_turn(throttle.SITE_EH)
             current_referer = referer
             if current_referer and attempt_idx > 0 and alt_url:
                 alt_ref = get_alternate_domain_url(current_referer)
@@ -415,7 +415,7 @@ def fetch_page(
                 if ban_seconds is not None:
                     last_diagnosis = diagnosis or "Reason: IP temporarily banned by E-Hentai."
                     diagnoses_by_domain[urlparse(current_url).netloc] = last_diagnosis
-                    throttle.report_ban(ban_seconds)
+                    throttle.report_ban(ban_seconds, source=throttle.SITE_EH)
                     banned = True
                     break
 

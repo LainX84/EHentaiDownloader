@@ -35,8 +35,6 @@ class WhenDoneMixin:  # pylint: disable=too-few-public-methods,no-member
         if success:
             self._bar1["value"] = 100
             self._bar1_pct.configure(text="100%")
-            self._bar2["value"] = 100
-            self._bar2_pct.configure(text="100%")
         self._log_box.configure(state="normal")
 
         sep = "─" * 60

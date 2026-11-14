@@ -1,0 +1,7 @@
+# Docker / web version: the download libraries of requirements.txt (no Tkinter) + the web server
+beautifulsoup4==4.13.4
+requests==2.32.4
+rich==14.1.0
+Pillow>=10.0.0
+fastapi==0.162.7
+uvicorn==0.54.0

@@ -1,9 +1,13 @@
-"""Background threads: single, batch, link check and retry downloads."""
+"""Background threads: single, batch, link check and retry downloads.
+
+Batch and retry run one lane per site (E-Hentai / ExHentai and nhentai) at the same time.
+"""
 
 # pylint: disable=protected-access,too-many-lines
 from __future__ import annotations
 
 import queue
+import threading
 
 from src.config import (
     CREATE_CBZ,
@@ -30,8 +34,7 @@ class WorkersMixin:  # pylint: disable=too-few-public-methods,no-member
         self._clear_log()
         self._bar1["value"] = 0
         self._bar1_pct.configure(text="0%")
-        self._bar2["value"] = 0
-        self._bar2_pct.configure(text="0%")
+        self._reset_lane_bars()
 
     def _run_single(
         self, url: str, image_format: str = "original", rename: bool = RENAME_SEQUENTIAL, cbz: bool = CREATE_CBZ,
@@ -42,7 +45,7 @@ class WorkersMixin:  # pylint: disable=too-few-public-methods,no-member
         append_session_banner(f"SINGLE DOWNLOAD START: {url}")
         try:
             from src.cli.downloader import download_album
-            lm = GUILiveManager(log_queue=self._q, mode="single")
+            lm = GUILiveManager(log_queue=self._q, mode="single", lane=site_lane(url))
             ok, failed_items = download_album(
                 url, lm, image_format=image_format, rename_sequential=rename, create_cbz=cbz,
             )
@@ -56,100 +59,126 @@ class WorkersMixin:  # pylint: disable=too-few-public-methods,no-member
         finally:
             self._q.put(("DONE", success, failed_by_url))
 
-    def _next_batch_task(self) -> dict | None:
-        """Worker thread: next task of the live queue, or None when nothing is left.
+    # ------------------------------------------------------------ batch: one lane per site
+    #
+    # E-Hentai / ExHentai and nhentai are different servers with their own limits, so the
+    # batch runs one "lane" (worker thread) per site: a gallery of each site downloads at
+    # the same time, while galleries of the same site still go one after another. A lane
+    # starts when its first link is queued and stops when its queue is empty; the last
+    # lane to stop closes the batch.
 
-        Before giving up it asks the GUI to look once more for lines added in the meantime;
-        the queue is closed under the lock, so a line added later is never lost (it simply
-        stays in the list for the next batch).
+    def _ensure_lane(self, lane: str) -> None:
+        """Start the worker of lane if it is not running. Call with _batch_lock held."""
+        if self._lane_running.get(lane) or not self._batch_accepting:
+            return
+        self._lane_running[lane] = True
+        threading.Thread(target=self._run_batch_lane, args=(lane,), daemon=True).start()
+
+    def _next_batch_task(self, lane: str) -> tuple[dict | None, bool]:
+        """Worker thread: (next task of lane, False), or (None, last) when the lane is empty.
+
+        Before giving up it asks the GUI to look once more for lines added in the meantime.
+        The lane is stopped under the lock, so a line added later is never lost: the GUI
+        starts the lane again. last is True when no other lane is running: the batch is over.
         """
+        lane_queue = self._batch_queues[lane]
         try:
-            return self._batch_queue.get_nowait()
+            return lane_queue.get_nowait(), False
         except queue.Empty:
             pass
-        self._batch_scan_done.clear()
-        self._q.put(("BATCH_SCAN",))
-        self._batch_scan_done.wait(timeout=5)
+        scanned = threading.Event()
+        self._q.put(("BATCH_SCAN", scanned))
+        scanned.wait(timeout=5)
         with self._batch_lock:
             try:
-                return self._batch_queue.get_nowait()
+                return lane_queue.get_nowait(), False
             except queue.Empty:
-                self._batch_accepting = False
-                return None
+                self._lane_running[lane] = False
+                last = not any(self._lane_running.values())
+                if last:
+                    self._batch_accepting = False
+                return None, last
 
-    def _run_batch(self, image_format: str = "original", rename: bool = RENAME_SEQUENTIAL, cbz: bool = CREATE_CBZ) -> None:
-        """Worker thread: download the batch list one album after another.
-
-        Tasks come from a live queue filled by the GUI thread, so links added at the bottom
-        of the list while the batch runs are downloaded too.
-        """
-        success = True
-        failed_by_url: dict[str, list[str]] = {}
-        done_count = 0
+    def _run_batch_lane(self, lane: str) -> None:
+        """Worker thread: download the galleries of one site, one after another."""
+        last = False
         try:
-            from src.cli.downloader import download_album, format_url_line, gallery_name, update_failed_url
-
-            append_session_banner(f"BATCH DOWNLOAD START ({self._batch_total} albums)")
-
             while True:
-                task = self._next_batch_task()
+                task, last = self._next_batch_task(lane)
                 if task is None:
-                    break
-                task_id, url, name = task["id"], task["url"], task["name"]
-                with self._batch_lock:
-                    self._task_state[task_id] = "active"
-                    total_items = self._batch_total
-                self._q.put(("TASK_ACTIVE", task_id, done_count + 1, total_items, name or gallery_name(url) or url))
-
-                if task["dup"]:
-                    self._q.put(("LOG", _ts(), "Duplicate",
-                                 f"{name or url}: same gallery as a link already in the batch, skipped."))
-                    ok, failed_items = True, []
-                elif task_id in self._verify_bad:
-                    # The parallel link check already found this gallery unreadable
-                    self._q.put(("LOG", _ts(), "Skipped",
-                                 f"{url}: link check failed, not downloaded (added to Retry Failed)."))
-                    update_failed_url(url, has_failures=True)
-                    ok, failed_items = False, []
-                else:
-                    lm = GUILiveManager(
-                        log_queue=self._q,
-                        mode="batch",
-                        batch_idx=done_count,
-                        batch_total=total_items,
-                    )
-                    ok, failed_items = download_album(
-                        url, lm, image_format=image_format, rename_sequential=rename, name_hint=name, create_cbz=cbz,
-                    )
-                    # Rewrite the line as "STATUS | IMAGES | TITLE | LINK" with what is now known
-                    self._q.put(("TASK_ANNOTATE", task_id, format_url_line(url)))
-
-                with self._batch_lock:
-                    self._task_state[task_id] = "done"
-                done_count += 1
-                if not ok or failed_items:
-                    failed_by_url[url] = failed_items
-                    success = False
-                    self._q.put(("TASK_DONE", task_id, False))
-                else:
-                    self._q.put(("TASK_DONE", task_id, True))
-
-            # failed_downloads.txt is already updated album by album by download_album():
-            # albums that failed in earlier sessions stay in the queue.
-            self._q.put((
-                "PROGRESS_BARS",
-                1.0, f"{done_count}/{done_count} (100%)",
-                1.0, "100%",
-            ))
-        except Exception as exc:
-            self._q.put(("LOG", _ts(), "ERROR", str(exc)))
-            success = False
+                    return
+                try:
+                    self._run_batch_task(task, lane)
+                except Exception as exc:  # one gallery must not stop the lane
+                    self._q.put(("LOG", _ts(), "ERROR", f"{task['url']}: {exc}"))
+                    with self._batch_lock:
+                        self._batch_result["success"] = False
+                        self._task_state[task["id"]] = "done"
+                    self._q.put(("TASK_DONE", task["id"], False))
         finally:
-            with self._batch_lock:
-                self._batch_accepting = False
-            self._batch_stop.set()
-            self._q.put(("BATCH_FINISHED",))
-            self._q.put(("DONE", success, failed_by_url))
+            if last:
+                self._finish_batch()
+
+    def _run_batch_task(self, task: dict, lane: str) -> None:
+        """Worker thread: download (or skip) one gallery of the batch."""
+        from src.cli.downloader import download_album, format_url_line, gallery_name, update_failed_url
+
+        image_format, rename, cbz = self._batch_options
+        task_id, url, name = task["id"], task["url"], task["name"]
+        with self._batch_lock:
+            self._task_state[task_id] = "active"
+            self._batch_result["started"] += 1
+            started = self._batch_result["started"]
+            total_items = self._batch_total
+        self._q.put(("TASK_ACTIVE", task_id, started, total_items, name or gallery_name(url) or url))
+
+        lm = None
+        if task["dup"]:
+            self._q.put(("LOG", _ts(), "Duplicate",
+                         f"{name or url}: same gallery as a link already in the batch, skipped."))
+            ok, failed_items = True, []
+        elif task_id in self._verify_bad:
+            # The parallel link check already found this gallery unreadable
+            self._q.put(("LOG", _ts(), "Skipped",
+                         f"{url}: link check failed, not downloaded (added to Retry Failed)."))
+            update_failed_url(url, has_failures=True)
+            ok, failed_items = False, []
+        else:
+            lm = GUILiveManager(
+                log_queue=self._q,
+                mode="batch",
+                batch_total=total_items,
+                progress=self._batch_progress,
+                log_prefix=f"[{lane}] ",
+                lane=lane,
+            )
+            ok, failed_items = download_album(
+                url, lm, image_format=image_format, rename_sequential=rename, name_hint=name, create_cbz=cbz,
+            )
+            # Rewrite the line as "STATUS | IMAGES | TITLE | LINK" with what is now known
+            self._q.put(("TASK_ANNOTATE", task_id, format_url_line(url)))
+        self._batch_progress.album_finished(lm)
+
+        with self._batch_lock:
+            self._task_state[task_id] = "done"
+            if not ok or failed_items:
+                self._batch_result["failed"][url] = failed_items
+                self._batch_result["success"] = False
+        self._q.put(("TASK_DONE", task_id, ok and not failed_items))
+
+    def _finish_batch(self) -> None:
+        """Worker thread (last lane): close the batch and tell the GUI."""
+        # failed_downloads.txt is already updated album by album by download_album():
+        # albums that failed in earlier sessions stay in the queue.
+        with self._batch_lock:
+            self._batch_accepting = False
+            done = self._batch_result["started"]
+            success = self._batch_result["success"]
+            failed_by_url = dict(self._batch_result["failed"])
+        self._q.put(("UPDATE_BAR1", 1.0, f"{done}/{done} (100%)"))
+        self._batch_stop.set()
+        self._q.put(("BATCH_FINISHED",))
+        self._q.put(("DONE", success, failed_by_url))
 
     def _run_batch_verify(self) -> None:
         """Worker thread: check not-yet-verified links while the batch downloads.
@@ -228,53 +257,52 @@ class WorkersMixin:  # pylint: disable=too-few-public-methods,no-member
             self._q.put(("VERIFY_DONE", ok_count, bad_count, domains))
 
     def _run_retry(self, image_format: str = "original", rename: bool = RENAME_SEQUENTIAL, cbz: bool = CREATE_CBZ) -> None:
-        """Worker thread: retry every album of the failed queue and keep only those still failing."""
+        """Worker thread: retry every album of the failed queue and keep only those still failing.
+
+        As in the batch, E-Hentai / ExHentai and nhentai albums are retried in two lanes at
+        the same time.
+        """
         success = True
         failed_by_url: dict[str, list[str]] = {}
         try:
             from src.cli.retry import collect_retry_urls
-            from src.cli.downloader import download_album, gallery_name, save_failed_urls
+            from src.cli.downloader import save_failed_urls
 
             retry_urls = collect_retry_urls()
             total = len(retry_urls)
             append_session_banner(f"RETRY START ({total} albums)")
-            remaining: list[str] = []
-
+            lanes: dict[str, list[tuple[int, str]]] = {}
             for idx, url in enumerate(retry_urls):
-                line_no = idx + 1
-                self._q.put(("RETRY_HIGHLIGHT", line_no, idx + 1, total, gallery_name(url) or url))
+                lanes.setdefault(site_lane(url), []).append((idx + 1, url))
 
-                lm = GUILiveManager(
-                    log_queue=self._q,
-                    mode="retry",
-                    batch_idx=idx,
-                    batch_total=total,
-                    line_no=line_no,
+            progress = BatchProgress(self._q, lambda: total, "Retry Total:")
+            remaining: dict[int, str] = {}
+            counter = {"started": 0}
+            lock = threading.Lock()
+            threads = [
+                threading.Thread(
+                    target=self._run_retry_lane,
+                    args=(lane, items, total, progress, (image_format, rename, cbz), remaining, failed_by_url,
+                          counter, lock),
+                    daemon=True,
                 )
-                ok, failed_items = download_album(
-                    url, lm, image_format=image_format, rename_sequential=rename,
-                    name_hint=gallery_name(url), create_cbz=cbz,
-                )
-                if not ok or failed_items:
-                    remaining.append(url)
-                    failed_by_url[url] = failed_items
-                    success = False
-                    self._q.put(("RETRY_LINE_DONE", line_no, False))
-                else:
-                    self._q.put(("RETRY_LINE_DONE", line_no, True))
+                for lane, items in lanes.items()
+            ]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
 
-            save_failed_urls(remaining)
+            still_failing = [remaining[line_no] for line_no in sorted(remaining)]
+            success = not still_failing
+            save_failed_urls(still_failing)
 
             self._q.put((
                 "LOG", _ts(), "Retry completed",
-                f"Processed: {total} | Still failing: {len(remaining)}",
+                f"Processed: {total} | Still failing: {len(still_failing)}",
             ))
 
-            self._q.put((
-                "PROGRESS_BARS",
-                1.0, f"{total}/{total} (100%)",
-                1.0, "100%",
-            ))
+            self._q.put(("UPDATE_BAR1", 1.0, f"{total}/{total} (100%)"))
 
             self._q.put(("RELOAD_LISTS",))  # reload both lists on the GUI thread
         except Exception as exc:
@@ -282,3 +310,92 @@ class WorkersMixin:  # pylint: disable=too-few-public-methods,no-member
             success = False
         finally:
             self._q.put(("DONE", success, failed_by_url))
+
+    def _run_retry_lane(  # pylint: disable=too-many-arguments,too-many-positional-arguments
+        self, lane: str, items: list[tuple[int, str]], total: int, progress: "BatchProgress",
+        options: tuple, remaining: dict[int, str], failed_by_url: dict[str, list[str]],
+        counter: dict[str, int], lock: threading.Lock,
+    ) -> None:
+        """Worker thread: retry the albums of one site, one after another."""
+        from src.cli.downloader import download_album, gallery_name
+
+        image_format, rename, cbz = options
+        for line_no, url in items:
+            with lock:
+                counter["started"] += 1
+                started = counter["started"]
+            self._q.put(("RETRY_HIGHLIGHT", line_no, started, total, gallery_name(url) or url))
+            lm = GUILiveManager(
+                log_queue=self._q,
+                mode="retry",
+                batch_total=total,
+                line_no=line_no,
+                progress=progress,
+                log_prefix=f"[{lane}] ",
+                lane=lane,
+            )
+            try:
+                ok, failed_items = download_album(
+                    url, lm, image_format=image_format, rename_sequential=rename,
+                    name_hint=gallery_name(url), create_cbz=cbz,
+                )
+            except Exception as exc:  # one album must not stop the lane
+                self._q.put(("LOG", _ts(), "ERROR", f"{url}: {exc}"))
+                ok, failed_items = False, [str(exc)]
+            progress.album_finished(lm)
+            if not ok or failed_items:
+                with lock:
+                    remaining[line_no] = url
+                    failed_by_url[url] = failed_items
+                self._q.put(("RETRY_LINE_DONE", line_no, False))
+            else:
+                self._q.put(("RETRY_LINE_DONE", line_no, True))
+
+
+def site_lane(url: str) -> str:
+    """Download lane of a link: "nhentai" for nhentai.net, "E-Hentai" for everything else."""
+    from src import nhentai
+    return throttle.SITE_NH if nhentai.is_nhentai_url(url or "") else throttle.SITE_EH
+
+
+class BatchProgress:
+    """Progress bars of a batch / retry where albums of different sites download at once.
+
+    Bar 1 (total): albums finished plus the share already done of those in progress.
+    Site bars: images of the album in progress on that site (E-Hentai / ExHentai or nhentai).
+    """
+
+    def __init__(self, gui_queue: queue.Queue, total_fn, total_label: str = "Batch Total:") -> None:
+        """total_fn() returns the number of albums of the batch (it grows while links are added)."""
+        self._q = gui_queue
+        self._total_fn = total_fn
+        self._total_label = total_label
+        self._lock = threading.Lock()
+        self._albums: dict[int, tuple[int, int]] = {}  # id(live manager) -> (done, total)
+        self._finished = 0
+
+    def album_update(self, owner, done: int, total: int) -> None:
+        """An album in progress has done of total images."""
+        total = max(1, total)
+        with self._lock:
+            self._albums[id(owner)] = (done, total)
+            self._emit_total()
+            lane = getattr(owner, "lane", None)
+            if lane:
+                frac = min(1.0, done / total)
+                self._q.put(("LANE_BAR", lane, frac, f"{done}/{total} ({frac * 100:.0f}%)"))
+
+    def album_finished(self, owner) -> None:
+        """An album is over (downloaded, failed or skipped); owner may be None."""
+        with self._lock:
+            if owner is not None:
+                self._albums.pop(id(owner), None)
+            self._finished += 1
+            self._emit_total()
+
+    def _emit_total(self) -> None:
+        """Send the total bar to the GUI (lock held)."""
+        total = max(1, self._total_fn(), self._finished + len(self._albums))
+        active = list(self._albums.values())
+        overall = min(1.0, (self._finished + sum(d / t for d, t in active)) / total)
+        self._q.put(("UPDATE_BAR1", overall, f"{self._finished}/{total} ({overall * 100:.0f}%)"))

@@ -187,10 +187,10 @@ def _retry_after(response: requests.Response) -> float:
 
 
 def report_rate_limit(response, where: str) -> None:
-    """nhentai answered 429: pause every download for the time asked, plus 10-15 s."""
+    """nhentai answered 429: pause every nhentai request for the time asked, plus 10-15 s."""
     delay = _retry_after(response)
     logging.warning(f"nhentai rate limit (HTTP 429) on {where}.")
-    throttle.report_ban(delay, source="nhentai", margin_range=NHENTAI_BLOCK_EXTRA_WAIT)
+    throttle.report_ban(delay, source=throttle.SITE_NH, margin_range=NHENTAI_BLOCK_EXTRA_WAIT)
 
 
 _api_lock = threading.Lock()
@@ -210,7 +210,7 @@ def _wait_api_slot(interval: float) -> None:
 
 def fetch(session: requests.Session, url: str, referer: str | None = None,
           retries: int = PAGE_FETCH_RETRIES) -> requests.Response:
-    """GET an nhentai page / API URL with global pacing and polite retries.
+    """GET an nhentai page / API URL with nhentai pacing and polite retries.
 
     Returns the 200 response; raises RuntimeError with a readable reason otherwise.
     404 is returned as well (the caller decides what it means).
@@ -221,8 +221,8 @@ def fetch(session: requests.Session, url: str, referer: str | None = None,
         headers["Authorization"] = f"Key {api_key}"
     last_error = ""
     for attempt in range(max(1, retries)):
-        throttle.wait_while_banned()
-        throttle.wait_turn()
+        throttle.wait_while_banned(throttle.SITE_NH)
+        throttle.wait_turn(throttle.SITE_NH)
         _wait_api_slot(NHENTAI_API_INTERVAL_KEY if api_key else NHENTAI_API_INTERVAL)
         try:
             response = session.get(url, timeout=CONNECTION_TIMEOUT, headers=headers)
@@ -234,7 +234,7 @@ def fetch(session: requests.Session, url: str, referer: str | None = None,
             if _is_cloudflare_challenge(response):
                 raise RuntimeError(f"Reason: Cloudflare browser check (HTTP {response.status_code}). {CLOUDFLARE_HELP}")
             if response.status_code == 429:
-                # Global pause with countdown (GUI status bar); the loop waits it out at the top
+                # nhentai pause with countdown (GUI status bar); the loop waits it out at the top
                 report_rate_limit(response, url)
                 last_error = "rate limit (HTTP 429)"
                 continue

@@ -1,0 +1,22 @@
+# EHentai Downloader – web version. Example: docker compose -f docker/compose.yml up -d --build
+#
+# The page has no login: publish the port only on the LAN address of the host
+# (e.g. "192.168.1.10:8099:8000"), never on the internet.
+services:
+  ehentaidownloader:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: ehentaidownloader:local
+    container_name: ehentaidownloader
+    restart: unless-stopped
+    user: "1000:1000"
+    environment:
+      TZ: Europe/Rome
+    ports:
+      - "8099:8000"
+    volumes:
+      # E-Hentai/, nhentai/, temp/ and cookies.json
+      - ./data:/data
+      # settings.json, URLs.txt, failed_downloads.txt, session.log
+      - ./config:/config

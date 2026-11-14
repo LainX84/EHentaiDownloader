@@ -204,6 +204,10 @@ session.log
 session.log.*
 Downloads/
 temp/
+# web / Docker version run from the project folder (python -m src.web, docker/compose.yml)
+/data/
+docker/data/
+docker/config/
 # temporary files written while saving (settings.json.part, cookies.json.part, URLs.txt.part, images)
 *.part
 

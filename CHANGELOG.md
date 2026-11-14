@@ -4,6 +4,44 @@ All notable changes to this fork of EHentai Downloader. Versions follow the rele
 (`v<version>`); the ready-to-use apps of each version are on the
 [releases page](https://github.com/LainX84/EHentaiDownloader/releases).
 
+## [2.0.2] – 2026-11-14
+
+### Added
+- **Docker version with a web interface** (`docker/`, `src/web/`): the same downloads from a
+  browser, for a home server. Single / Batch / Retry tabs, Verify Links, duplicates, pause, speed,
+  image format, Auto Rename, CBZ / ComicInfo.xml, theme, log, disclaimer and update check work as
+  in the desktop window. The downloads run in the container, so they go on with the browser
+  closed and every open page shows the same state. `/data` holds `E-Hentai/`, `nhentai/`,
+  `temp/` and `cookies.json`; `/config` the lists, settings and log. No login: meant for the
+  home network only. Guide: [docker/README.md](docker/README.md).
+  - *Account & cookies*: paste the cookies from the browser and `cookies.json` is written by
+    itself; once it exists, its content is shown and can be edited directly.
+  - Status bar counter of the images downloaded **today** (from 06:00 to 06:00, kept across
+    restarts) instead of "this session".
+  - At the end of a download the total bar goes back to empty after ~45 s (the result stays in
+    the status line), so a page opened later does not show an old 100 %.
+  - Not in the web version: drag and drop, clipboard watcher, *When done* and *Open Downloads*
+    (the albums are in the `/data` folder of the server).
+- **Docker images published automatically** (`.github/workflows/docker.yml`): every `v*` tag builds
+  `linux/amd64` and `linux/arm64` images and pushes them to Docker Hub
+  (`lainx84/ehentaidownloader`) and GitHub Packages (`ghcr.io/lainx84/ehentaidownloader`); the
+  Docker Hub page text comes from `docker/README.md`.
+
+### Changed
+- **E-Hentai / ExHentai and nhentai download in parallel**: they are different servers with
+  different rules, so *Start Batch* and *Retry Failed* keep one gallery of each site going at
+  the same time and the queue empties faster. Galleries of the same site still download one
+  after another. The batch list highlights both active lines, the status bar names both
+  galleries, and the log lines of each album start with `[E-Hentai]` or `[nhentai]`.
+- **One progress bar per site**: the old *Page Download* bar is now two bars,
+  *E-Hentai/ExHentai* (yellow) and *nhentai* (red), under *Album Total* / *Batch Total*
+  (green). In a batch or retry each bar shows the images of the album in progress on that
+  site; in a single download the bar of the album's site shows the page being downloaded. A site
+  with nothing to do shows *Idle*.
+- Request pace and ban pause are now **per site**: an E-Hentai IP ban pauses only the E-Hentai
+  downloads and an nhentai "Too Many Requests" only the nhentai ones; the status bar shows a
+  countdown for each paused site and *Resume now* clears both.
+
 ## [2.0.1] – 2026-11-13
 
 ### Added
@@ -64,5 +102,6 @@ First release of the fork with ready-to-use apps.
 - **Start-up notice** (disclaimer: no warranty, developed with the help of Claude AI) with
   *Don't show this again for 30 days*; *Help* menu with GitHub page, license and about.
 
+[2.0.2]: https://github.com/LainX84/EHentaiDownloader/compare/v2.0.1...v2.0.2
 [2.0.1]: https://github.com/LainX84/EHentaiDownloader/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/LainX84/EHentaiDownloader/releases/tag/v2.0.0

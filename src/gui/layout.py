@@ -115,10 +115,20 @@ class LayoutMixin:  # pylint: disable=too-few-public-methods,no-member
         s.configure("TProgressbar",
                     troughcolor=style.BORDER, background=style.ACCENT,
                     thickness=10, borderwidth=0)
+        s.layout("Horizontal.Total.TProgressbar",
+                 s.layout("Horizontal.TProgressbar"))
+        s.configure("Total.TProgressbar",
+                    troughcolor=style.BORDER, background=style.TOTAL_BAR,
+                    thickness=10, borderwidth=0)
         s.layout("Horizontal.Task.TProgressbar",
                  s.layout("Horizontal.TProgressbar"))
         s.configure("Task.TProgressbar",
                     troughcolor=style.BORDER, background=style.TASK_BAR,
+                    thickness=10, borderwidth=0)
+        s.layout("Horizontal.NH.TProgressbar",
+                 s.layout("Horizontal.TProgressbar"))
+        s.configure("NH.TProgressbar",
+                    troughcolor=style.BORDER, background=style.NH_BAR,
                     thickness=10, borderwidth=0)
 
         # Separator
@@ -675,62 +685,67 @@ class LayoutMixin:  # pylint: disable=too-few-public-methods,no-member
 
         self._load_retry_list()
 
+    # Label of each site bar (the lanes of the parallel download) and its ttk style
+    LANE_BARS = (
+        (throttle.SITE_EH, "E-Hentai/ExHentai:", "Task.TProgressbar"),
+        (throttle.SITE_NH, "nhentai:", "NH.TProgressbar"),
+    )
+    LANE_IDLE = "Idle"
+
     def _build_progress_area(self) -> None:
-        """Build the two progress bars (album/batch total and page/current album)."""
+        """Build the progress bars: the total, then one bar per site (E-Hentai / ExHentai and nhentai).
+
+        Single download: the site bar shows the page being downloaded.
+        Batch / retry: each site bar shows the album of that site in progress, because the
+        two sites download at the same time.
+        """
         prog_frame = tk.Frame(self, bg=style.BG)
         prog_frame.pack(side="bottom", fill="x", padx=PAD, pady=(4, 6))
 
-        # Row 0: Bar 1 (Album Total / Batch Total)
-        row0 = tk.Frame(prog_frame, bg=style.BG)
-        row0.pack(fill="x", pady=(0, 3))
-        row0.columnconfigure(1, weight=1)
+        def bar_row(label: str, bar_style: str, pady: tuple[int, int]) -> tuple:
+            """One row: label, bar, value text."""
+            row = tk.Frame(prog_frame, bg=style.BG)
+            row.pack(fill="x", pady=pady)
+            row.columnconfigure(1, weight=1)
+            lbl = tk.Label(
+                row, text=label, bg=style.BG, fg=style.TEXT,
+                font=FONT_SMALL, width=19, anchor="w",
+            )
+            lbl.grid(row=0, column=0, sticky="w", padx=(0, 6))
+            progress = ttk.Progressbar(row, orient="horizontal", style=bar_style, length=100)
+            progress.grid(row=0, column=1, sticky="ew", padx=(0, 10))
+            pct = tk.Label(
+                row, text="0%", bg=style.BG, fg=style.TEXT_SEC,
+                font=FONT_SMALL, width=20, anchor="e",
+            )
+            pct.grid(row=0, column=2, sticky="e")
+            return lbl, progress, pct
 
-        self._bar1_lbl = tk.Label(
-            row0, text="Album Total:", bg=style.BG, fg=style.TEXT,
-            font=FONT_SMALL, width=17, anchor="w",
-        )
-        self._bar1_lbl.grid(row=0, column=0, sticky="w", padx=(0, 6))
+        # Total (Album Total / Batch Total / Retry Total / Verified)
+        self._bar1_lbl, self._bar1, self._bar1_pct = bar_row("Album Total:", "Total.TProgressbar", (0, 3))
 
-        self._bar1 = ttk.Progressbar(
-            row0, orient="horizontal",
-            style="TProgressbar", length=100,
-        )
-        self._bar1.grid(row=0, column=1, sticky="ew", padx=(0, 10))
+        # One bar per site
+        self._lane_bars: dict[str, tuple] = {}
+        for idx, (lane, label, bar_style) in enumerate(self.LANE_BARS):
+            last = idx == len(self.LANE_BARS) - 1
+            self._lane_bars[lane] = bar_row(label, bar_style, (0, 0 if last else 3))
+        self._reset_lane_bars()
 
-        self._bar1_pct = tk.Label(
-            row0, text="0%", bg=style.BG, fg=style.TEXT_SEC,
-            font=FONT_SMALL, width=18, anchor="e",
-        )
-        self._bar1_pct.grid(row=0, column=2, sticky="e")
+    def _set_lane_bar(self, lane: str, frac: float | None, text: str | None) -> None:
+        """Update the bar of one site (None leaves that part as it is)."""
+        widgets = self._lane_bars.get(lane)
+        if widgets is None:
+            return
+        _lbl, progress, pct = widgets
+        if frac is not None:
+            progress["value"] = max(0.0, min(1.0, frac)) * 100
+        if text is not None:
+            pct.configure(text=text)
 
-        # Row 1: Bar 2 (Page Download / Current Album)
-        row1 = tk.Frame(prog_frame, bg=style.BG)
-        row1.pack(fill="x")
-        row1.columnconfigure(1, weight=1)
-
-        self._bar2_lbl = tk.Label(
-            row1, text="Page Download:", bg=style.BG, fg=style.TEXT,
-            font=FONT_SMALL, width=17, anchor="w",
-        )
-        self._bar2_lbl.grid(row=0, column=0, sticky="w", padx=(0, 6))
-
-        self._bar2 = ttk.Progressbar(
-            row1, orient="horizontal",
-            style="Task.TProgressbar", length=100,
-        )
-        self._bar2.grid(row=0, column=1, sticky="ew", padx=(0, 10))
-
-        self._bar2_pct = tk.Label(
-            row1, text="0%", bg=style.BG, fg=style.TEXT_SEC,
-            font=FONT_SMALL, width=18, anchor="e",
-        )
-        self._bar2_pct.grid(row=0, column=2, sticky="e")
-
-        # Backward compatibility aliases
-        self._overall_bar = self._bar1
-        self._overall_pct = self._bar1_pct
-        self._task_bar = self._bar2
-        self._task_pct = self._bar2_pct
+    def _reset_lane_bars(self) -> None:
+        """Empty every site bar and mark it idle."""
+        for lane in self._lane_bars:
+            self._set_lane_bar(lane, 0.0, self.LANE_IDLE)
 
     def _build_log_area(self) -> None:
         """Build the coloured log box with 'Open Log File' and 'Clear' buttons."""

@@ -76,9 +76,14 @@ class EHentaiGUI(  # pylint: disable=too-many-ancestors,too-many-instance-attrib
         # Every claimed editor line carries a "task_<id>" tag, so it can be found again even
         # when lines above it are added or removed.
         self._batch_lock = threading.Lock()
-        self._batch_queue: queue.Queue = queue.Queue()    # tasks waiting for the downloader
+        # tasks waiting for the downloader, one queue (lane) per site: they download in parallel
+        self._batch_queues: dict[str, queue.Queue] = {}
+        self._lane_running: dict[str, bool] = {}           # lane -> its worker thread is running
+        self._batch_result: dict = {"started": 0, "success": True, "failed": {}}
+        self._batch_options: tuple = ()                   # (image format, rename, cbz) of the batch
+        self._batch_progress = None
+        self._active_tasks: dict[int, str] = {}           # GUI thread: id -> label of lines downloading
         self._verify_queue: queue.Queue = queue.Queue()   # tasks waiting for the link check
-        self._batch_scan_done = threading.Event()
         self._batch_stop = threading.Event()
         self._batch_accepting = False   # GUI may still hand new lines to the running batch
         self._batch_seq = 0             # last task id
@@ -185,28 +190,14 @@ class EHentaiGUI(  # pylint: disable=too-many-ancestors,too-many-instance-attrib
                 if msg_type == "LOG":
                     _, ts, event, details = msg
                     self._append_log(ts, event, details)
-                elif msg_type == "SET_LABELS":
-                    _, lbl1, lbl2 = msg
-                    self._bar1_lbl.configure(text=lbl1)
-                    self._bar2_lbl.configure(text=lbl2)
-                elif msg_type == "PROGRESS_BARS":
-                    _, b1_val, b1_txt, b2_val, b2_txt = msg
-                    if b1_val is not None:
-                        self._bar1["value"] = b1_val * 100
-                    if b1_txt is not None:
-                        self._bar1_pct.configure(text=b1_txt)
-                    if b2_val is not None:
-                        self._bar2["value"] = b2_val * 100
-                    if b2_txt is not None:
-                        self._bar2_pct.configure(text=b2_txt)
                 elif msg_type == "UPDATE_BAR1":
                     _, val, txt = msg
                     self._bar1["value"] = val * 100
                     self._bar1_pct.configure(text=txt)
-                elif msg_type == "UPDATE_BAR2":
-                    _, val, txt = msg
-                    self._bar2["value"] = val * 100
-                    self._bar2_pct.configure(text=txt)
+                elif msg_type == "LANE_BAR":
+                    # Bar of one site: page in progress (single) or album in progress (batch / retry)
+                    _, lane, val, txt = msg
+                    self._set_lane_bar(lane, val, txt)
                 elif msg_type == "BATCH_HIGHLIGHT":
                     _, line_no, cur_idx, total_cnt, url = msg
                     self._batch_editor.tag_remove("active_batch_line", "1.0", END)
@@ -225,7 +216,7 @@ class EHentaiGUI(  # pylint: disable=too-many-ancestors,too-many-instance-attrib
                     self._on_verify_done(*msg[1:])
                 elif msg_type == "BATCH_SCAN":
                     self._scan_batch_editor()
-                    self._batch_scan_done.set()
+                    msg[1].set()  # the lane that asked is waiting for this scan
                 elif msg_type == "TASK_ACTIVE":
                     _, task_id, cur_idx, total_cnt, label = msg
                     self._on_task_active(task_id, cur_idx, total_cnt, label)
@@ -251,7 +242,8 @@ class EHentaiGUI(  # pylint: disable=too-many-ancestors,too-many-instance-attrib
                 elif msg_type == "RETRY_HIGHLIGHT":
                     _, line_no, cur_idx, total_cnt, url = msg
                     self._retry_list.configure(state="normal")
-                    self._retry_list.tag_remove("active_batch_line", "1.0", END)
+                    # Several lines can be active at once (one per site): the old one is
+                    # cleared by RETRY_LINE_DONE
                     self._retry_list.tag_add("active_batch_line", f"{line_no}.0", f"{line_no}.end")
                     self._retry_list.see(f"{line_no}.0")
                     self._retry_list.configure(state="disabled")
@@ -263,9 +255,6 @@ class EHentaiGUI(  # pylint: disable=too-many-ancestors,too-many-instance-attrib
                     tag = "done_batch_line" if is_ok else "fail_batch_line"
                     self._retry_list.tag_add(tag, f"{line_no}.0", f"{line_no}.end")
                     self._retry_list.configure(state="disabled")
-                elif msg_type == "PROGRESS":
-                    _, overall, task = msg
-                    self._update_progress(overall, task)
                 elif msg_type == "DONE":
                     success = msg[1]
                     failed = msg[2] if len(msg) > 2 else []
@@ -306,13 +295,6 @@ class EHentaiGUI(  # pylint: disable=too-many-ancestors,too-many-instance-attrib
         self._log_box.insert(END, f"{details}\n", tag)
         self._log_box.see(END)
         self._log_box.configure(state="disabled")
-
-    def _update_progress(self, overall: float, task: float) -> None:
-        """Set both progress bars from 0.0-1.0 fractions."""
-        self._bar1["value"] = overall * 100
-        self._bar1_pct.configure(text=f"{overall*100:.0f}%")
-        self._bar2["value"] = task * 100
-        self._bar2_pct.configure(text=f"{task*100:.0f}%")
 
     def _on_format_changed(self, _event=None) -> None:
         """Warn the user that forcing a fixed format drops animations."""
@@ -374,11 +356,13 @@ class EHentaiGUI(  # pylint: disable=too-many-ancestors,too-many-instance-attrib
         if remaining <= 0:
             self._end_ban_display("▶ Ban expired: downloads resumed.")
             return
-        source = throttle.ban_source()
-        what = "IP banned by E-Hentai" if source == "E-Hentai" else f"Blocked by {source} (too many requests)"
+        parts = []
+        for site, left in throttle.banned_sites():
+            left = int(left)
+            what = "IP banned by E-Hentai" if site == throttle.SITE_EH else f"Blocked by {site} (too many requests)"
+            parts.append(f"{what}: {site} paused, resuming in {left // 60}:{left % 60:02d}")
         self._status_var.set(
-            f"⏸ {what}: paused, resuming in {remaining // 60}:{remaining % 60:02d} "
-            "(changed IP with a VPN? press Resume now)"
+            f"⏸ {' · '.join(parts)} (changed IP with a VPN? press Resume now)"
         )
         self._ban_tick_job = self.after(1000, self._ban_tick)
 
@@ -409,8 +393,8 @@ class EHentaiGUI(  # pylint: disable=too-many-ancestors,too-many-instance-attrib
             self._append_log(
                 _ts(), "Pause",
                 "Downloads paused (images already being received finish first). URLs.txt is "
-                "saved and the album in progress stays in temp/: you can close the program, "
-                "the next Start Batch resumes from this album skipping the pages already on disk.",
+                "saved and the albums in progress stay in temp/: you can close the program, "
+                "the next Start Batch resumes from them skipping the pages already on disk.",
             )
         else:
             throttle.set_paused(False)
@@ -556,7 +540,6 @@ class EHentaiGUI(  # pylint: disable=too-many-ancestors,too-many-instance-attrib
         fmt = self._get_selected_format()
         self._begin_download()
         self._bar1_lbl.configure(text="Album Total:")
-        self._bar2_lbl.configure(text="Page Download:")
         self._status_var.set(f"Download [{fmt}]: {url}")
         threading.Thread(
             target=self._run_single, args=(url, fmt, self._rename_var.get(), self._cbz_var.get()), daemon=True,
@@ -585,12 +568,17 @@ class EHentaiGUI(  # pylint: disable=too-many-ancestors,too-many-instance-attrib
         fmt = self._get_selected_format()
         self._begin_download(editor_editable=True)
         self._bar1_lbl.configure(text="Batch Total:")
-        self._bar2_lbl.configure(text="Current Album:")
         self._clear_batch_marks()
 
         # Fresh live queue; the first scan claims every link currently in the list
+        from src.gui.workers import BatchProgress
+        self._batch_options = (fmt, self._rename_var.get(), self._cbz_var.get())
+        self._batch_progress = BatchProgress(self._q, lambda: self._batch_total)
+        self._active_tasks = {}
         with self._batch_lock:
-            self._batch_queue = queue.Queue()
+            self._batch_queues = {lane: queue.Queue() for lane in throttle.SITES}
+            self._lane_running = {lane: False for lane in throttle.SITES}
+            self._batch_result = {"started": 0, "success": True, "failed": {}}
             self._verify_queue = queue.Queue()
             self._batch_total = 0
             self._batch_keys = {}
@@ -599,17 +587,21 @@ class EHentaiGUI(  # pylint: disable=too-many-ancestors,too-many-instance-attrib
             self._failed_task_ids = []
             self._batch_accepting = True
         self._batch_stop.clear()
+        # The scan queues every link and starts the lane (worker) of each site that has some
         self._scan_batch_editor(live=False)
         to_check = self._verify_queue.qsize()
+        with self._batch_lock:
+            nothing_to_do = not any(self._lane_running.values())
+            if nothing_to_do:
+                self._batch_accepting = False
 
         self._status_var.set(f"Batch download [{fmt}]: {self._batch_total} URL(s)")
         if to_check:
             self._q.put(("LOG", _ts(), "Verify",
                          f"{to_check} link(s) not verified yet: checking them in parallel with the download."))
             threading.Thread(target=self._run_batch_verify, daemon=True).start()
-        threading.Thread(
-            target=self._run_batch, args=(fmt, self._rename_var.get(), self._cbz_var.get()), daemon=True,
-        ).start()
+        if nothing_to_do:
+            threading.Thread(target=self._finish_batch, daemon=True).start()
 
     def _start_verify(self) -> None:
         """'Verify Links' button: check every link online without downloading anything."""
@@ -625,7 +617,6 @@ class EHentaiGUI(  # pylint: disable=too-many-ancestors,too-many-instance-attrib
         entries = self._editor_entries()
         self._begin_download()
         self._bar1_lbl.configure(text="Verified:")
-        self._bar2_lbl.configure(text="")
         self._status_var.set(f"Verifying {len(entries)} link(s)…")
         threading.Thread(target=self._run_verify, args=(entries,), daemon=True).start()
 
@@ -645,7 +636,6 @@ class EHentaiGUI(  # pylint: disable=too-many-ancestors,too-many-instance-attrib
         fmt = self._get_selected_format()
         self._begin_download()
         self._bar1_lbl.configure(text="Retry Total:")
-        self._bar2_lbl.configure(text="Current Album:")
         self._retry_list.configure(state="normal")
         self._retry_list.tag_remove("active_batch_line", "1.0", END)
         self._retry_list.tag_remove("done_batch_line", "1.0", END)

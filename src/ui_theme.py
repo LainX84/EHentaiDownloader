@@ -40,7 +40,9 @@ LIGHT: dict[str, str] = {
     "TEXT": "#2C3E50",        # main text
     "TEXT_SEC": "#606F7B",    # secondary text
     "TAB_HOVER": "#EBF2FB",
-    "TASK_BAR": "#8E44AD",    # second progress bar
+    "TOTAL_BAR": "#2ECC71",   # total progress bar (green)
+    "TASK_BAR": "#F1C40F",    # E-Hentai / ExHentai progress bar (yellow)
+    "NH_BAR": "#D62828",      # nhentai progress bar (red)
     "ON_ACCENT": "#FFFFFE",   # text on coloured buttons (not #FFFFFF: that is PANEL)
     "DANGER_ACTIVE": "#C0392B",
     "SELECT_BG": "#D5E8F5",
@@ -69,7 +71,9 @@ DARK: dict[str, str] = {
     "TEXT": "#E3E8EE",
     "TEXT_SEC": "#A9B4BF",
     "TAB_HOVER": "#2F3742",
-    "TASK_BAR": "#A86BD1",
+    "TOTAL_BAR": "#4CD787",
+    "TASK_BAR": "#F4D03F",
+    "NH_BAR": "#E8504A",
     "ON_ACCENT": "#FFFFFF",
     "DANGER_ACTIVE": "#C94741",
     "SELECT_BG": "#2D4A6B",

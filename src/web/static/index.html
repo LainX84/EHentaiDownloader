@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>EHentai Downloader</title>
+<link rel="icon" type="image/png" href="/assets/icon_32.png">
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<header class="hdr">
+  <div class="hdr-left">
+    <img src="/assets/icon_small.png" alt="" class="logo">
+    <span class="app-name">EHentai Downloader</span>
+    <span class="app-version" id="version"></span>
+    <nav class="menus">
+      <div class="menu">
+        <button class="menu-btn">File</button>
+        <div class="menu-list">
+          <button data-action="files">Open Downloads folder</button>
+          <button data-action="logfile">Open log file</button>
+          <hr>
+          <button data-action="account">Account &amp; cookies…</button>
+        </div>
+      </div>
+      <div class="menu">
+        <button class="menu-btn">Settings</button>
+        <div class="menu-list">
+          <label><input type="checkbox" data-setting="auto_rename"> Auto Rename (01…N when complete)</label>
+          <label><input type="checkbox" data-setting="cbz_archive"> CBZ archive</label>
+          <label><input type="checkbox" data-setting="comic_info"> ComicInfo.xml in CBZ</label>
+          <hr>
+          <div class="menu-head">Speed</div>
+          <div id="speed-options"></div>
+          <hr>
+          <div class="menu-head">Theme</div>
+          <label><input type="radio" name="theme" value="auto"> Automatic (system)</label>
+          <label><input type="radio" name="theme" value="light"> Light</label>
+          <label><input type="radio" name="theme" value="dark"> Dark</label>
+        </div>
+      </div>
+      <div class="menu">
+        <button class="menu-btn">Help</button>
+        <div class="menu-list">
+          <a id="link-github" target="_blank" rel="noopener">GitHub page</a>
+          <a id="link-issues" target="_blank" rel="noopener">Report a problem…</a>
+          <hr>
+          <button data-action="updates">Check for updates now</button>
+          <label><input type="checkbox" data-setting="check_updates"> Check for updates at start-up</label>
+          <hr>
+          <button data-action="disclaimer">Disclaimer</button>
+          <button data-action="license">License</button>
+          <button data-action="about">About</button>
+        </div>
+      </div>
+    </nav>
+  </div>
+  <div class="hdr-right">
+    <label for="format" class="muted small">Image Format:</label>
+    <select id="format"></select>
+  </div>
+</header>
+
+<div id="update-banner" class="banner hidden"></div>
+
+<main>
+  <div class="tabs-row">
+    <div class="tabs">
+      <button class="tab active" data-tab="single">🔗 Single Download</button>
+      <button class="tab" data-tab="batch">📋 Batch Download</button>
+      <button class="tab" data-tab="retry">🔄 Retry Failed</button>
+    </div>
+    <button class="btn accent small-btn" data-action="files">📁 Open Downloads</button>
+  </div>
+
+  <section class="card tab-page" id="tab-single">
+    <h2>Single Album Download</h2>
+    <p class="sub">Paste an E-Hentai / ExHentai / nhentai gallery URL and click Start.</p>
+    <div class="row">
+      <label for="single-url" class="muted small">Gallery URL</label>
+      <input id="single-url" type="text" spellcheck="false" autocomplete="off">
+      <button class="btn ghost" id="single-clear" title="Clear">✕</button>
+    </div>
+    <div class="row end">
+      <button class="btn accent" id="single-start">▶ Start Download</button>
+    </div>
+  </section>
+
+  <section class="card tab-page hidden" id="tab-batch">
+    <h2>Batch Download (URLs.txt)</h2>
+    <p class="sub">One URL per line, saved automatically. Paste any text with links: only gallery links are kept.<br>
+      You can keep adding links while the batch runs; downloaded lines disappear after a while.</p>
+    <div class="add-row">
+      <textarea id="add-text" rows="2" spellcheck="false" placeholder="Paste here any text with gallery links (a page, a message…) and press Add, or Ctrl+V on the list."></textarea>
+      <button class="btn accent" id="add-btn">＋ Add</button>
+    </div>
+    <div id="sort-offer" class="offer hidden">
+      Download the galleries with fewer images first? The list will be sorted by number of images (smallest first); links with problems go to the bottom.
+      <span><button class="btn accent small-btn" id="sort-yes">Sort</button>
+      <button class="btn ghost small-btn" id="sort-no">No</button></span>
+    </div>
+    <div id="batch-list" class="list" tabindex="0"></div>
+    <textarea id="batch-editor" class="editor hidden" spellcheck="false" wrap="off"></textarea>
+    <div class="estimate sub" id="estimate"></div>
+    <div class="btn-row">
+      <div class="left">
+        <button class="btn ghost" id="batch-reload">🔄 Reload</button>
+        <button class="btn ghost" id="batch-edit">✏️ Edit as text</button>
+        <button class="btn ghost" id="batch-clear">🗑 Clear All</button>
+        <button class="btn ghost" id="batch-dedupe">🧹 Duplicates</button>
+        <button class="btn ghost" id="batch-verify">🔍 Verify Links</button>
+      </div>
+      <div class="right">
+        <button class="btn ghost" id="pause-btn" disabled>⏸ Pause</button>
+        <button class="btn accent" id="batch-start">▶ Start Batch</button>
+      </div>
+    </div>
+  </section>
+
+  <section class="card tab-page hidden" id="tab-retry">
+    <h2>Retry Failed Downloads</h2>
+    <p class="sub">URLs loaded from failed_downloads.txt.</p>
+    <div id="retry-list" class="list retry"></div>
+    <div class="sub" id="retry-count"></div>
+    <div class="btn-row">
+      <div class="left">
+        <button class="btn ghost" id="retry-reload">🔄 Refresh List</button>
+        <button class="btn ghost" id="retry-clear">🗑 Clear Queue</button>
+      </div>
+      <div class="right">
+        <button class="btn ghost pause-twin" disabled>⏸ Pause</button>
+        <button class="btn accent" id="retry-start">🔄 Retry Failed</button>
+      </div>
+    </div>
+  </section>
+
+  <section class="progress">
+    <div class="bar-row"><span class="bar-label" id="bar1-label">Total:</span>
+      <div class="bar"><div class="fill total" id="bar1"></div></div><span class="bar-text" id="bar1-text">0%</span></div>
+    <div id="lane-bars"></div>
+  </section>
+
+  <section class="log-area">
+    <div class="log-head">
+      <span class="muted small">Log</span>
+      <span>
+        <button class="link-btn" id="log-clear">Clear</button>
+        <button class="link-btn accent-text" data-action="logfile">📄 Open Log File</button>
+      </span>
+    </div>
+    <div id="log" class="log"></div>
+  </section>
+</main>
+
+<footer class="status">
+  <span id="status" class="status-text">Ready.</span>
+  <span id="ban" class="ban hidden"><span id="ban-text"></span>
+    <button class="btn warn small-btn" id="ban-resume" title="Skip the wait, e.g. after switching IP">▶ Resume now</button></span>
+  <span id="session" class="muted small"></span>
+  <span id="speed-label" class="small"></span>
+</footer>
+
+<div id="modal-back" class="modal-back hidden">
+  <div class="modal" role="dialog" aria-modal="true">
+    <h3 id="modal-title"></h3>
+    <div id="modal-body"></div>
+    <div id="modal-buttons" class="modal-buttons"></div>
+  </div>
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

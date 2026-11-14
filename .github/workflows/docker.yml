@@ -1,0 +1,89 @@
+name: Docker image
+
+# Builds the Docker image of the web version (docker/Dockerfile) and publishes it on
+# Docker Hub (lainx84/ehentaidownloader) and GitHub Packages (ghcr.io/lainx84/ehentaidownloader).
+#  - Push a tag "v<version>" (e.g. v2.1.0): tags <version>, <major>.<minor> and latest.
+#  - "Run workflow" from the Actions tab: test image with the tag "dev" (latest is not touched).
+# The Docker Hub page text comes from docker/README.md (updated at every tag).
+#
+# Repository secrets needed (Settings → Secrets and variables → Actions):
+#   DOCKERHUB_USERNAME  Docker Hub user name
+#   DOCKERHUB_TOKEN     Docker Hub personal access token, "Read, Write, Delete" permission
+#                       (Delete is needed only to update the page description)
+# GitHub Packages uses the automatic GITHUB_TOKEN: nothing to set up.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  DOCKERHUB_IMAGE: lainx84/ehentaidownloader
+  GHCR_IMAGE: ghcr.io/lainx84/ehentaidownloader
+
+jobs:
+  image:
+    name: Build and push
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Image tags
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: |
+            ${{ env.DOCKERHUB_IMAGE }}
+            ${{ env.GHCR_IMAGE }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=raw,value=dev,enable=${{ github.event_name == 'workflow_dispatch' }}
+
+      - name: Set up QEMU (ARM build on an x86 runner)
+        uses: docker/setup-qemu-action@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Log in to GitHub Packages
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push (amd64 + arm64)
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: docker/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Update the Docker Hub page (docker/README.md)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: peter-evans/dockerhub-description@v5
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          repository: ${{ env.DOCKERHUB_IMAGE }}
+          short-description: "E-Hentai / ExHentai / nhentai gallery downloader with a web interface"
+          readme-filepath: docker/README.md

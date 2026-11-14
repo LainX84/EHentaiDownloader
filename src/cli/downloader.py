@@ -16,6 +16,7 @@ import logging
 import random
 import re
 import sys
+import threading
 import time
 from pathlib import Path
 from urllib.parse import urlparse
@@ -444,8 +445,19 @@ def load_failed_urls() -> list[str]:
     return _dedupe_keep_order([url for url, _ in load_failed_entries()])
 
 
+# E-Hentai and nhentai albums can finish at the same moment (two download lanes):
+# failed_downloads.txt is read, changed and written back under this lock.
+_failed_lock = threading.RLock()
+
+
 def save_failed_urls(urls: list[str]) -> None:
     """Persist failed album URLs for future retries, each followed by its gallery name if known."""
+    with _failed_lock:
+        _save_failed_urls(urls)
+
+
+def _save_failed_urls(urls: list[str]) -> None:
+    """save_failed_urls() without the lock."""
     normalized = _dedupe_keep_order([url for url in urls if _is_retryable_link(url.strip())])
     content = "\n".join(format_url_line(url) for url in normalized)
     if content:
@@ -455,6 +467,12 @@ def save_failed_urls(urls: list[str]) -> None:
 
 def update_failed_url(url: str, has_failures: bool) -> None:
     """Add or remove an album URL from the failed URL registry."""
+    with _failed_lock:
+        _update_failed_url(url, has_failures)
+
+
+def _update_failed_url(url: str, has_failures: bool) -> None:
+    """update_failed_url() without the lock."""
     key = _album_key(url)
     current = load_failed_urls()
 

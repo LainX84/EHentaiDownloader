@@ -105,7 +105,7 @@ class NHentaiAlbumDownloader(AlbumDownloader):
         last_error: Exception | None = None
         for attempt in range(max(1, IMAGE_FETCH_RETRIES)):
             throttle.wait_while_paused()
-            throttle.wait_while_banned()
+            throttle.wait_while_banned(throttle.SITE_NH)
             try:
                 response = self.session.get(
                     url, timeout=CONNECTION_TIMEOUT, headers=nhentai.image_headers(), stream=True,
