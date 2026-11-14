@@ -180,6 +180,10 @@ class Engine:
         threading.Thread(target=self._dispatch, name="dispatcher", daemon=True).start()
         append_session_banner("WEB APPLICATION START")
         self.log("Ready", f"EHentai Downloader {config.APP_VERSION} (web). Data folder: {self.data_dir}")
+        from src.general_utils import has_account_cookies  # pylint: disable=import-outside-toplevel
+        if not has_account_cookies():
+            self.log("WARNING", "No ExHentai account cookies in cookies.json: ExHentai links and galleries "
+                     "removed from E-Hentai can't be downloaded. Add them from the Account window.")
         if self.settings.get("check_updates", True):
             threading.Thread(target=self._startup_update_check, daemon=True).start()
 

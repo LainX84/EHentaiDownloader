@@ -52,3 +52,17 @@ def test_gallery_suffix_is_kept_when_shortened():
 
 def test_short_names_are_unchanged():
     assert sanitize_directory_name("Fern 5 [AI Generated]") == "Fern 5 [AI Generated]"
+
+
+@pytest.mark.parametrize("title", [
+    "[Circle (Author)] " + "Very Long Romanized Title " * 12 + "[English] [Group]",
+    "原神大放送" * 60,
+])
+def test_cbz_name_fits_with_its_part_ending(title, tmp_path):
+    from src.downloader.cbz_archive import PART_SUFFIX, CbzArchiveMixin
+
+    album = CbzArchiveMixin()
+    album.clean_album_name = album.album_name = title
+    album.site_download_folder = tmp_path
+    cbz = album._cbz_path()  # pylint: disable=protected-access
+    assert len(f"{cbz.name}{PART_SUFFIX}".encode("utf-8")) <= MAX_NAME_BYTES

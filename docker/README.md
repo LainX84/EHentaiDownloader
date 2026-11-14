@@ -13,7 +13,7 @@ downloads, same files, same settings.
   and [GitHub Packages `ghcr.io/lainx84/ehentaidownloader`](https://github.com/LainX84/EHentaiDownloader/pkgs/container/ehentaidownloader)
   (same image on both)
 - **Architectures:** `linux/amd64` and `linux/arm64`
-- **Tags:** `latest`, the version (e.g. `2.0.2`) and `major.minor` (e.g. `2.0`); the image version is the same as the desktop program
+- **Tags:** `latest`, the version (e.g. `2.0.3`) and `major.minor` (e.g. `2.0`); the image version is the same as the desktop program
 
 > ⚠️ **No login.** The page is meant for the **home network only**: publish the port on the
 > LAN address of the server, never on the internet (no port forwarding, no public reverse proxy).

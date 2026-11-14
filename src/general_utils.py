@@ -130,6 +130,12 @@ def _classify_page_problem(
 
     # Check for empty response (specifically on ExHentai or general)
     if not html.strip():
+        if "exhentai" in lowered_url and not has_cookies:
+            return (
+                "Reason: no ExHentai login cookies set (cookies.json is missing or has no "
+                "'ipb_member_id' / 'ipb_pass_hash'). Add your account cookies (Account / Cookies) "
+                f"and use 'Retry Failed'. HTTP {status_code}."
+            )
         if "exhentai" in lowered_url:
             return (
                 "Reason: ExHentai access unauthorized or rejected. "
@@ -337,6 +343,14 @@ def create_session() -> requests.Session:
     return session
 
 
+def has_account_cookies(session: requests.Session | None = None) -> bool:
+    """True when the E-Hentai / ExHentai login cookies (member id + pass hash) are set."""
+    names = {c.name for c in session.cookies if c.value} if session is not None else {
+        k for k, v in load_cookies().items() if v
+    }
+    return {"ipb_member_id", "ipb_pass_hash"} <= names
+
+
 def get_alternate_domain_url(url: str) -> str | None:
     """Return equivalent URL on alternate domain (e-hentai.org <-> exhentai.org)."""
     if "e-hentai.org" in url:
@@ -364,7 +378,8 @@ def fetch_page(
     permanent ones (404, ban, missing cookies) fail immediately.
     """
     request_session = session or create_session()
-    has_cookies = bool(request_session.cookies)
+    # Only the account cookies count ("nw" is always set and says nothing about the login)
+    has_cookies = has_account_cookies(request_session)
 
     urls_to_try = [url]
     alt_url = get_alternate_domain_url(url)
@@ -432,7 +447,11 @@ def fetch_page(
                         rate_limited = response.status_code in (429, 509)
 
                 if not diagnosis and not response.text.strip():
-                    if "exhentai" in current_url.lower():
+                    if "exhentai" in current_url.lower() and not has_cookies:
+                        diagnosis = (
+                            "Reason: no ExHentai login cookies set (cookies.json missing or incomplete)."
+                        )
+                    elif "exhentai" in current_url.lower():
                         diagnosis = (
                             f"Reason: ExHentai access rejected for {current_url} "
                             "(empty server response; 'igneous', 'ipb_member_id' or 'ipb_pass_hash' cookies missing or invalid)."

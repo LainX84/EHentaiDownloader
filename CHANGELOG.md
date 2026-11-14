@@ -4,6 +4,20 @@ All notable changes to this fork of EHentai Downloader. Versions follow the rele
 (`v<version>`); the ready-to-use apps of each version are on the
 [releases page](https://github.com/LainX84/EHentaiDownloader/releases).
 
+## [2.0.3] – 2026-11-14
+
+### Fixed
+- CBZ archives of galleries with very long titles failed with "File name too long" on
+  Linux / macOS / Docker (the album was left as a folder): the name now leaves room for the
+  temporary `.cbz.part` ending used while the archive is written.
+- Clear warning when no ExHentai account cookies are set (desktop and Docker): it is shown in the
+  log for every E-Hentai / ExHentai gallery and at web start-up, and the error now says the cookies
+  are missing instead of "expired or wrong". ExHentai links, and galleries removed from E-Hentai
+  that are still on ExHentai, need them.
+
+### Added
+- *Contributors* section in the README.
+
 ## [2.0.2] – 2026-11-14
 
 ### Added

@@ -13,6 +13,8 @@ from pathlib import Path
 from src.config import CBZ_COMIC_INFO, DOWNLOAD_FOLDER
 from src.file_utils import MAX_NAME_BYTES, sanitize_directory_name
 
+PART_SUFFIX = ".part"  # same ending as AlbumDownloader._part_path
+
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".avif"}
 
 # Whether ComicInfo.xml is written into new CBZ files. The GUI sets it from
@@ -42,12 +44,14 @@ class CbzArchiveMixin:  # pylint: disable=too-few-public-methods
         folder = self.site_download_folder if folder is None else folder
         title = self.clean_album_name or self.album_name or "album"
         # 255 is the file-name limit (bytes on Linux / macOS); on Windows also stay below
-        # the 260-char MAX_PATH
-        room = 255 - len(".cbz")
+        # the 260-char MAX_PATH. The archive is first written as "<name>.cbz.part", so the
+        # room left for the title must also fit the ".part" ending.
+        ending = len(f".cbz{PART_SUFFIX}")
+        room = 255 - ending
         if os.name == "nt":
-            room = min(room, 259 - len(str(folder.resolve())) - 1 - len(".cbz"))
+            room = min(room, 259 - len(str(folder.resolve())) - 1 - ending)
         name = sanitize_directory_name(title, max_length=max(20, room),
-                                       max_bytes=MAX_NAME_BYTES - len(".cbz")) or "album"
+                                       max_bytes=MAX_NAME_BYTES - ending) or "album"
         return folder / f"{name}.cbz"
 
     @staticmethod

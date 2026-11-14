@@ -27,7 +27,9 @@ from src.downloader.nhentai_downloader import NHentaiAlbumDownloader
 from src.config import DEFAULT_IMAGE_FORMAT, FAILED_URLS_FILE
 from src.cli import PROJECT_ROOT
 from src.file_utils import append_session_banner, read_file, write_file
-from src.general_utils import clear_terminal, create_session, fetch_page, validate_gallery_url
+from src.general_utils import (
+    clear_terminal, create_session, fetch_page, has_account_cookies, validate_gallery_url,
+)
 from src.managers.live_manager import LiveManager
 from src.managers.log_manager import LoggerTable
 from src.managers.progress_manager import ProgressManager
@@ -510,6 +512,13 @@ def download_album(
     """
     failed_items: list[str] = []
     remember_gallery_name(url, name_hint)
+    if not nhentai.is_nhentai_url(url) and not has_account_cookies():
+        live_manager.update_log(
+            "WARNING",
+            "No ExHentai account cookies set (ipb_member_id, ipb_pass_hash, igneous): "
+            "ExHentai links and galleries removed from E-Hentai will fail. "
+            "Add them from the Account / Cookies window.",
+        )
     try:
         album_downloader = create_album_downloader(
             url,

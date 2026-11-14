@@ -10,11 +10,10 @@
 
 ---
 
-## What's new in 2.0.2
+## What's new in 2.0.3
 
-- **E-Hentai / ExHentai and nhentai download side by side** in *Start Batch* and *Retry Failed*: one gallery per site at a time, so the queue empties faster (galleries of the same site still go one after another).
-- **One progress bar per site** (*E-Hentai/ExHentai* and *nhentai*) under the total bar, and a separate pace and ban pause for each site: an E-Hentai IP ban no longer stops the nhentai downloads, and the other way round.
-- **Docker version with a web interface** for a home server, with the same functions as the desktop window: see [docker/README.md](docker/README.md), [Docker Hub](https://hub.docker.com/r/lainx84/ehentaidownloader) or [GitHub Packages](https://github.com/LainX84/EHentaiDownloader/pkgs/container/ehentaidownloader).
+- **CBZ of galleries with very long titles**: on Linux, macOS and Docker the archive could fail with "File name too long" and the album was left as a folder; now the name always fits.
+- **Clear warning when the ExHentai cookies are missing** (desktop and Docker): ExHentai links, and galleries removed from E-Hentai that are still on ExHentai, need your account cookies; the log now says so before the download instead of reporting them as "expired".
 
 All changes, also of earlier versions: [CHANGELOG.md](CHANGELOG.md).
 
@@ -235,8 +234,8 @@ The archive for your system is written to `release/` (PyInstaller can only build
 **Publishing a release** (maintainers): set `APP_VERSION` in `src/config.py`, add a section to `CHANGELOG.md`, commit, then push a tag with the same version:
 
 ```bash
-git tag v2.0.2
-git push origin v2.0.2
+git tag v2.0.3
+git push origin v2.0.3
 ```
 
 The GitHub workflow `.github/workflows/release.yml` builds Windows, macOS (Apple Silicon and Intel) and Linux on GitHub's servers and attaches the four archives to a new release with generated notes. *Actions → Build release → Run workflow* makes a test build without publishing (the archives can be downloaded from the run page).
@@ -365,6 +364,11 @@ EHentaiDownloader/
 Files created at runtime (and ignored by git): `Downloads/`, `temp/`, `URLs.txt`, `failed_downloads.txt`, `session.log*`, `cookies.json`.
 
 ---
+
+## Contributors
+
+- [LainX84](https://github.com/LainX84)
+- [Claude](https://github.com/claude)
 
 ## Disclaimer
 
