@@ -2,7 +2,7 @@ name: Docker image
 
 # Builds the Docker image of the web version (docker/Dockerfile) and publishes it on
 # Docker Hub (lainx84/ehentaidownloader) and GitHub Packages (ghcr.io/lainx84/ehentaidownloader).
-#  - Push a tag "v<version>" (e.g. v2.1.0): tags <version>, <major>.<minor> and latest.
+#  - Push a tag "v<version>" (e.g. v2.1.0): tags <version> and latest.
 #  - "Run workflow" from the Actions tab: test image with the tag "dev" (latest is not touched).
 # The Docker Hub page text comes from docker/README.md (updated at every tag).
 #
