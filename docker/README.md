@@ -13,7 +13,7 @@ downloads, same files, same settings.
   and [GitHub Packages `ghcr.io/lainx84/ehentaidownloader`](https://github.com/LainX84/EHentaiDownloader/pkgs/container/ehentaidownloader)
   (same image on both)
 - **Architectures:** `linux/amd64` and `linux/arm64`
-- **Tags:** `latest` and the version (e.g. `2.0.3`); the image version is the same as the desktop program
+- **Tags:** `latest` and the version (e.g. `2.0.4`); the image version is the same as the desktop program
 
 > ⚠️ **No login.** The page is meant for the **home network only**: publish the port on the
 > LAN address of the server, never on the internet (no port forwarding, no public reverse proxy).
@@ -94,7 +94,7 @@ Everything of the desktop window, from any browser of the house:
   each with its own progress bar, pace and ban pause.
 - **Verify Links** (title, images, source site, then optional "fewer images first" order),
   **Duplicates**, **Pause / Resume**, **Resume now** after an IP ban.
-- **Settings**: image format (AUTO / Native / JPG / PNG / WEBP), Auto Rename `01…N`, CBZ archive,
+- **Settings**: image format (Native / WEBP – default – / JPEG / JPEG XL / PNG / AVIF, all open and royalty-free), Auto Rename `01…N`, CBZ archive,
   ComicInfo.xml, speed (1x–5x), light / dark / automatic theme.
 - **Status bar**: images downloaded **today** (the counter starts again every day at 06:00 and
   survives restarts), current speed, ban countdown.

@@ -15,7 +15,7 @@ from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from src import config, paths, throttle
+from src import config, image_formats, paths, throttle
 from src.texts import APP_NAME, DISCLAIMER_TEXT, DISCLAIMER_TITLE
 from src.web.engine import FORMAT_OPTIONS, Engine, EngineError
 
@@ -52,6 +52,11 @@ class CookiesPasteBody(BaseModel):
     nhentai_api_key: str | None = None
 
 
+class FormatNoticeBody(BaseModel):
+    """Image format whose notice is hidden for FORMAT_NOTICE_SNOOZE_DAYS days."""
+    format: str = ""
+
+
 class DisclaimerBody(BaseModel):
     """Notice accepted; snooze hides it for DISCLAIMER_SNOOZE_DAYS days."""
     snooze: bool = False
@@ -79,6 +84,14 @@ def create_app(data_dir: Path, config_dir: Path) -> FastAPI:
             "issues_url": config.ISSUES_URL,
             "upstream_url": config.UPSTREAM_URL,
             "formats": list(FORMAT_OPTIONS),
+            # Text shown when a format is chosen (lost animations, codecs needed to view it)
+            "format_notices": {label: image_formats.notice(name) for label, name in image_formats.FORMATS
+                               if image_formats.notice(name)},
+            "open_formats_note": image_formats.OPEN_FORMATS_NOTE,
+            "format_notice_snooze_days": config.FORMAT_NOTICE_SNOOZE_DAYS,
+            # Free Windows extension to view the format: name, store web page, Store app install window
+            "format_extensions": {label: dict(zip(("name", "page", "app"), image_formats.windows_extension(name)))
+                                  for label, name in image_formats.FORMATS if image_formats.windows_extension(name)},
             "speeds": [{"level": level, "name": name, "workers": workers}
                        for level, (name, _, workers) in sorted(throttle.SPEED_LEVELS.items())],
             "disclaimer": {"title": DISCLAIMER_TITLE, "text": DISCLAIMER_TEXT,
@@ -99,6 +112,10 @@ def create_app(data_dir: Path, config_dir: Path) -> FastAPI:
     def disclaimer(body: DisclaimerBody) -> dict:
         engine.accept_disclaimer(body.snooze)
         return {"ok": True}
+
+    @app.post("/api/format-notice")
+    def format_notice(body: FormatNoticeBody) -> dict:
+        return run(engine.snooze_format_notice, body.format)
 
     @app.post("/api/settings")
     def settings(body: dict) -> dict:
@@ -208,16 +225,6 @@ def create_app(data_dir: Path, config_dir: Path) -> FastAPI:
     def cookies_raw(body: TextBody) -> dict:
         run(engine.save_cookies_raw, body.text)
         return {"ok": True}
-
-    # files
-    @app.get("/api/files")
-    def files() -> dict:
-        return engine.list_files()
-
-    @app.get("/api/files/download")
-    def file_download(folder: str, name: str) -> FileResponse:
-        path = run(engine.file_path, folder, name)
-        return FileResponse(path, filename=path.name)
 
     # help
     @app.post("/api/updates/check")

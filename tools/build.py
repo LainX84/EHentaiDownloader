@@ -71,6 +71,7 @@ def run_pyinstaller(system: str) -> None:
         *[arg for name in ("icon.png", "icon_16.png", "icon_32.png", "icon_small.png", "logo_small.png")
           for arg in ("--add-data", f"{ROOT / 'assets' / name}{sep}assets")],
         "--collect-submodules", "src",
+        "--hidden-import", "pillow_jxl",  # JPEG XL plug-in, imported only when that format is chosen
     ]
     if system == "macos":
         args += ["--osx-bundle-identifier", "io.github.lainx84.ehentaidownloader"]

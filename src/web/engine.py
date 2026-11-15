@@ -25,20 +25,14 @@ from collections import deque
 from pathlib import Path
 from typing import Callable
 
-from src import config, throttle
+from src import config, image_formats, throttle
 from src.downloader.cbz_archive import set_comic_info
 from src.file_utils import append_session_banner, append_session_log, read_file, write_file
 from src.gui.live_manager import GUILiveManager, QueueLogHandler
 
 LOG_LINES_KEPT = 3000  # log lines kept in memory for the browser (the whole log is in session.log)
 
-FORMAT_OPTIONS = (
-    "AUTO (JPG / Native if animated)",
-    "Native (Original)",
-    "JPG (.jpg)",
-    "PNG (.png)",
-    "WEBP (.webp)",
-)
+FORMAT_OPTIONS = image_formats.LABELS  # default at the first start: WebP (small files, keeps animations)
 
 LANE_LABELS = {throttle.SITE_EH: "E-Hentai/ExHentai", throttle.SITE_NH: "nhentai"}
 LANE_IDLE = "Idle"
@@ -212,13 +206,16 @@ class Engine:
         fmt = self.settings.get("image_format")
         theme = self.settings.get("theme")
         return {
-            "image_format": fmt if fmt in FORMAT_OPTIONS else FORMAT_OPTIONS[0],
+            "image_format": image_formats.normalize_label(fmt) if fmt else image_formats.DEFAULT_LABEL,
             "auto_rename": bool(self.settings.get("auto_rename", config.RENAME_SEQUENTIAL)),
             "cbz_archive": bool(self.settings.get("cbz_archive", config.CREATE_CBZ)),
             "comic_info": bool(self.settings.get("comic_info", config.CBZ_COMIC_INFO)),
             "check_updates": bool(self.settings.get("check_updates", True)),
             "speed": throttle.get_speed(),
             "theme": theme if theme in THEMES else "auto",
+            # formats whose notice window is snoozed ("Don't show this again for 30 days")
+            "format_notices_hidden": [label for label, name in image_formats.FORMATS
+                                      if image_formats.notice_hidden(self.settings, name)],
         }
 
     def change_settings(self, changes: dict) -> dict:
@@ -248,6 +245,10 @@ class Engine:
                                           "now, parallel downloads from the next album.")
             self._save_settings()
             new = self.public_settings()
+        if new["image_format"] != current["image_format"]:
+            line = image_formats.log_line(self.selected_format())
+            if line:
+                self.log("Image Format notice", line)
         if new["auto_rename"] != current["auto_rename"]:
             self.log("Settings", "Auto Rename ON: images renamed 01…N when an album is complete."
                      if new["auto_rename"] else "Auto Rename OFF: images keep their download names.")
@@ -261,12 +262,8 @@ class Engine:
         return new
 
     def selected_format(self) -> str:
-        """Internal format name of the chosen image format (auto / original / jpg / png / webp)."""
-        val = self.public_settings()["image_format"].lower()
-        for name in ("auto", "jpg", "png", "webp"):
-            if name in val:
-                return name
-        return "original"
+        """Internal format name of the chosen image format (original / webp / jpg / jxl / png / avif)."""
+        return image_formats.name_from_label(self.public_settings()["image_format"])
 
     def _options(self) -> tuple[str, bool, bool]:
         """(image format, auto rename, cbz) for a new download."""
@@ -281,6 +278,15 @@ class Engine:
             return float(self.settings.get("disclaimer_hidden_until", 0)) < time.time()
         except (TypeError, ValueError):
             return True
+
+    def snooze_format_notice(self, label: str) -> dict:
+        """Hide the notice window of an image format for FORMAT_NOTICE_SNOOZE_DAYS days."""
+        if label not in FORMAT_OPTIONS:
+            raise EngineError("Unknown image format.")
+        with self._lock:
+            image_formats.hide_notice(self.settings, image_formats.name_from_label(label))
+            self._save_settings()
+            return self.public_settings()
 
     def accept_disclaimer(self, snooze: bool) -> None:
         """The notice was accepted; with snooze it is hidden for DISCLAIMER_SNOOZE_DAYS days."""
@@ -1341,43 +1347,6 @@ class Engine:
             self.log("Update", f"Version {result['version']} is available: {result['url']} "
                                "(update the Docker image to get it).")
         return result
-
-    # ------------------------------------------------------------------ files
-
-    def list_files(self) -> dict:
-        """Content of E-Hentai/, nhentai/ and temp/ (newest first)."""
-        result = {}
-        for folder in (config.EHENTAI_SUBFOLDER, config.NHENTAI_SUBFOLDER, config.TEMP_FOLDER):
-            base = self.data_dir / folder
-            entries = []
-            if base.is_dir():
-                for entry in os.scandir(base):
-                    if entry.name.startswith(".") or entry.name.endswith(".part"):
-                        continue
-                    try:
-                        stat = entry.stat()
-                        if entry.is_dir():
-                            files = [f for f in os.scandir(entry.path) if f.is_file()]
-                            size, count = sum(f.stat().st_size for f in files), len(files)
-                        else:
-                            size, count = stat.st_size, None
-                    except OSError:
-                        continue
-                    entries.append({"name": entry.name, "dir": entry.is_dir(), "size": size,
-                                    "files": count, "mtime": stat.st_mtime})
-            entries.sort(key=lambda item: item["mtime"], reverse=True)
-            result[folder] = entries
-        return result
-
-    def file_path(self, folder: str, name: str) -> Path:
-        """Path of a downloaded file, only inside E-Hentai/ or nhentai/."""
-        if folder not in (config.EHENTAI_SUBFOLDER, config.NHENTAI_SUBFOLDER):
-            raise EngineError("Unknown folder.")
-        base = (self.data_dir / folder).resolve()
-        path = (base / name).resolve()
-        if path.parent != base or not path.is_file():
-            raise EngineError("File not found.")
-        return path
 
     def session_log_tail(self, max_bytes: int = 300_000) -> str:
         """End of session.log ('Open log file')."""

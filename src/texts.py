@@ -31,7 +31,8 @@ THIRD_PARTY_TEXT = """Third-party software used by this program (each under its 
   • Python and Tkinter – PSF License
   • requests – Apache 2.0
   • Beautiful Soup – MIT
-  • Pillow – MIT-CMU (HPND)
+  • Pillow – MIT-CMU (HPND), with libwebp (BSD), libavif (BSD), libjpeg-turbo (BSD-style) and libpng (libpng License)
+  • pillow-jxl-plugin – GPL-3.0, with libjxl (BSD)
   • Rich – MIT
   • ImageMagick (optional, external program) – ImageMagick License
 """

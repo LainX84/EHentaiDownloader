@@ -28,7 +28,7 @@ from src.config import (
     RENAME_SEQUENTIAL,
     TEMP_FOLDER,
 )
-from src import throttle
+from src import image_formats, throttle
 from src.crawler.crawler import Crawler
 from src.crawler.crawler_utils import extract_nl_value, get_picture_pages
 from src.file_utils import (
@@ -53,8 +53,10 @@ _QUOTA_EXCEEDED_MARKERS = ("/509.gif", "/509s.gif")
 PART_SUFFIX = ".part"
 
 # Format names for ImageMagick's "FORMAT:path" output syntax (needed because ".part" hides the type)
-_MAGICK_FORMATS = {"jpg": "JPEG", "jpeg": "JPEG", "png": "PNG", "webp": "WEBP"}
-_PIL_FORMATS = {"jpg": "JPEG", "jpeg": "JPEG", "png": "PNG", "webp": "WEBP"}
+_MAGICK_FORMATS = {"jpg": "JPEG", "png": "PNG", "webp": "WEBP", "jxl": "JXL", "avif": "AVIF"}
+_PIL_FORMATS = {"jpg": "JPEG", "png": "PNG", "webp": "WEBP", "jxl": "JXL", "avif": "AVIF"}
+_QUALITY = {"jpg": 95, "webp": 95, "jxl": 90, "avif": 85}  # lossy formats (PNG is lossless)
+_ANIMATED_FORMATS = {"webp", "avif"}  # formats written with all the frames of an animated image
 
 
 class AlbumDownloader(CbzArchiveMixin):
@@ -91,7 +93,7 @@ class AlbumDownloader(CbzArchiveMixin):
         path = parsed.path if parsed.path.endswith("/") else f"{parsed.path}/"
         self.url = f"{parsed.scheme}://{parsed.netloc}{path}"
         self.live_manager = live_manager
-        self.image_format = (image_format or "original").lower().strip()
+        self.image_format = image_formats.normalize_name(image_format)
         self.session = create_session()
         self.initial_soup = fetch_page(
             self.url,
@@ -211,22 +213,12 @@ class AlbumDownloader(CbzArchiveMixin):
 
     def _get_target_filename(self, original_filename: str) -> str:
         """Return the target filename according to configured image format."""
-        if self.image_format in ("original", "native", ""):
+        if self.image_format == "original":
             return original_filename
-        stem = Path(original_filename).stem
-        if self.image_format == "auto":
-            return f"{stem}.jpg"
-        ext = self.image_format.lstrip(".")
-        if ext in ("jpeg", "jpg"):
-            return f"{stem}.jpg"
-        if ext == "png":
-            return f"{stem}.png"
-        if ext == "webp":
-            return f"{stem}.webp"
-        return original_filename
+        return f"{Path(original_filename).stem}{image_formats.EXTENSIONS[self.image_format]}"
 
     def _convert_with_imagemagick(self, content: bytes, target_path: Path, ext: str) -> bool:
-        """Attempt conversion using system ImageMagick executable."""
+        """Attempt conversion of a still image using the system ImageMagick executable."""
         magick_bin = shutil.which("magick") or shutil.which("convert")
         if not magick_bin:
             return False
@@ -234,13 +226,12 @@ class AlbumDownloader(CbzArchiveMixin):
         part = self._part_path(target_path)
         try:
             cmd = [magick_bin, "-"]
-            if ext in ("jpeg", "jpg"):
-                cmd.extend(["-background", "white", "-alpha", "remove", "-alpha", "off", "-quality", "95"])
-            elif ext == "webp":
-                cmd.extend(["-quality", "95"])
-            magick_fmt = _MAGICK_FORMATS.get(ext)
+            if ext == "jpg":
+                cmd.extend(["-background", "white", "-alpha", "remove", "-alpha", "off"])
+            if ext in _QUALITY:
+                cmd.extend(["-quality", str(_QUALITY[ext])])
             # The ".part" extension hides the type, so name the output format explicitly
-            cmd.append(f"{magick_fmt}:{part}" if magick_fmt else str(part))
+            cmd.append(f"{_MAGICK_FORMATS[ext]}:{part}")
 
             kwargs = {}
             if os.name == "nt":
@@ -250,7 +241,7 @@ class AlbumDownloader(CbzArchiveMixin):
                 startupinfo.wShowWindow = 0
                 kwargs["startupinfo"] = startupinfo
 
-            result = subprocess.run(cmd, input=content, capture_output=True, timeout=30, check=False, **kwargs)
+            result = subprocess.run(cmd, input=content, capture_output=True, timeout=60, check=False, **kwargs)
             if result.returncode == 0 and part.exists() and part.stat().st_size > 0:
                 os.replace(part, target_path)
                 return True
@@ -260,30 +251,58 @@ class AlbumDownloader(CbzArchiveMixin):
             self._discard(part)
             return False
 
+    @staticmethod
+    def _pillow_can_write(ext: str) -> bool:
+        """True if Pillow can write the format (JPEG XL needs the pillow-jxl-plugin package)."""
+        if ext == "jxl":
+            try:
+                # Registers JPEG XL in Pillow
+                import pillow_jxl  # noqa: F401  # pylint: disable=unused-import
+            except ImportError:
+                return False
+        from PIL import Image
+        Image.init()
+        return _PIL_FORMATS[ext] in Image.SAVE
+
     def _convert_with_pillow(self, content: bytes, target_path: Path, ext: str) -> bool:
-        """Attempt conversion using Pillow (PIL)."""
-        if ext not in _PIL_FORMATS:
-            self._save_bytes(target_path, content)
-            return True
+        """Attempt conversion using Pillow (PIL); WebP and AVIF keep animations with their timing."""
+        if not self._pillow_can_write(ext):
+            return False
         part = self._part_path(target_path)
         try:
             import io
             from PIL import Image
 
+            pil_fmt = _PIL_FORMATS[ext]
+            quality = _QUALITY.get(ext)
             with Image.open(io.BytesIO(content)) as img:
-                if ext in ("jpeg", "jpg"):
-                    # Handle transparency for JPEG
-                    if img.mode in ("RGBA", "LA") or (img.mode == "P" and "transparency" in img.info):
-                        bg = Image.new("RGB", img.size, (255, 255, 255))
-                        img_rgba = img.convert("RGBA")
-                        bg.paste(img_rgba, mask=img_rgba.split()[3])
-                        bg.save(part, "JPEG", quality=95)
-                    else:
-                        img.convert("RGB").save(part, "JPEG", quality=95)
-                elif ext == "png":
-                    img.save(part, "PNG")
+                animated = getattr(img, "is_animated", False) and getattr(img, "n_frames", 1) > 1
+                if animated and ext in _ANIMATED_FORMATS:
+                    # Animated GIF/WebP -> animated WebP/AVIF, keeping each frame's timing and the loop count
+                    durations = []
+                    for frame in range(img.n_frames):
+                        img.seek(frame)
+                        durations.append(int(img.info.get("duration", 100) or 100))
+                    img.seek(0)
+                    img.save(part, pil_fmt, save_all=True, duration=durations,
+                             loop=int(img.info.get("loop", 0) or 0), quality=quality)
                 else:
-                    img.save(part, "WEBP", quality=95)
+                    img.seek(0)  # still formats: the first frame
+                    has_alpha = img.mode in ("RGBA", "LA") or "transparency" in img.info
+                    if ext == "jpg":
+                        if has_alpha:
+                            # JPEG has no transparency: put the image on white
+                            img_rgba = img.convert("RGBA")
+                            frame = Image.new("RGB", img.size, (255, 255, 255))
+                            frame.paste(img_rgba, mask=img_rgba.split()[3])
+                        else:
+                            frame = img.convert("RGB")
+                    elif img.mode in ("RGB", "RGBA", "L", "LA") or ext == "png":
+                        frame = img
+                    else:
+                        frame = img.convert("RGBA" if has_alpha else "RGB")
+                    options = {"quality": quality} if quality else {}
+                    frame.save(part, pil_fmt, **options)
             if part.exists() and part.stat().st_size > 0:
                 os.replace(part, target_path)
                 return True
@@ -307,6 +326,8 @@ class AlbumDownloader(CbzArchiveMixin):
             return "bmp"
         if len(content) >= 12 and content[4:8] == b"ftyp" and content[8:12] in (b"avif", b"avis"):
             return "avif"
+        if content.startswith(b"\xff\x0a") or content.startswith(b"\x00\x00\x00\x0cJXL \r\n\x87\n"):
+            return "jxl"
 
         try:
             import io
@@ -317,7 +338,7 @@ class AlbumDownloader(CbzArchiveMixin):
             return ""
 
     def _convert_and_save(self, content: bytes, original_filename: str) -> None:
-        """Convert image bytes according to requested format, preserving animated images in AUTO mode."""
+        """Save the image in the chosen format ("original": exactly as the server sent it)."""
         stem = Path(original_filename).stem
         actual_fmt = self._detect_image_format(content)
         ext_map = {
@@ -328,59 +349,49 @@ class AlbumDownloader(CbzArchiveMixin):
             "gif": ".gif",
             "bmp": ".bmp",
             "avif": ".avif",
+            "jxl": ".jxl",
         }
         actual_ext = ext_map.get(actual_fmt, Path(original_filename).suffix.lower() or ".jpg")
 
-        # 1. AUTO mode: check if image is animated
-        if self.image_format == "auto":
-            if self._is_image_animated(content):
-                target_path = Path(self.download_path) / f"{stem}{actual_ext}"
-                self._save_bytes(target_path, content)
-                self.live_manager.update_log(
-                    "Animated image",
-                    f"Preserved original animation for {target_path.name}",
-                )
-                return
-            ext = "jpg"
-            target_path = Path(self.download_path) / f"{stem}.jpg"
-        elif self.image_format in ("original", "native", ""):
-            target_path = Path(self.download_path) / f"{stem}{actual_ext}"
-            self._save_bytes(target_path, content)
+        if self.image_format == "original":
+            self._save_bytes(Path(self.download_path) / f"{stem}{actual_ext}", content)
             return
-        else:
-            # Explicit format chosen by user (force conversion)
-            ext = self.image_format.lstrip(".").lower()
-            if ext in ("jpeg", "jpg"):
-                target_path = Path(self.download_path) / f"{stem}.jpg"
-                ext = "jpg"
-            elif ext == "png":
-                target_path = Path(self.download_path) / f"{stem}.png"
-            elif ext == "webp":
-                target_path = Path(self.download_path) / f"{stem}.webp"
-            else:
-                target_path = Path(self.download_path) / f"{stem}{actual_ext}"
 
+        ext = self.image_format
+        target_path = Path(self.download_path) / f"{stem}{image_formats.EXTENSIONS[ext]}"
         target_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # Check if the content is ALREADY in the target format
-        # (Compare true actual format with requested format, NOT the URL file extension!)
-        target_fmt = "jpeg" if ext in ("jpg", "jpeg") else ext
-        if actual_fmt == target_fmt or (target_fmt == "jpeg" and actual_fmt in ("jpeg", "jpg")):
+        # Already in the target format (true format from the content, NOT the URL extension): keep it as it is
+        if ext_map.get(actual_fmt) == image_formats.EXTENSIONS[ext]:
             self._save_bytes(target_path, content)
             return
 
-        # 1. Try ImageMagick if installed
-        if self._convert_with_imagemagick(content, target_path, ext):
-            return
+        if self._is_image_animated(content):
+            if ext in image_formats.STATIC_ONLY:
+                self.live_manager.update_log(
+                    "Animated image",
+                    f"{original_filename} is animated: {image_formats.label_for(ext)} keeps only its first frame.",
+                )
+            # Pillow handles every frame (or picks the first one) reliably, so it goes first
+            if self._convert_with_pillow(content, target_path, ext):
+                return
+        else:
+            # 1. Try ImageMagick if installed
+            if self._convert_with_imagemagick(content, target_path, ext):
+                return
+            # 2. Fallback to Pillow
+            if self._convert_with_pillow(content, target_path, ext):
+                return
 
-        # 2. Fallback to Pillow
-        if self._convert_with_pillow(content, target_path, ext):
-            return
-
-        # 3. Fallback to saving original raw file with its true extension if conversion failed
+        # 3. Conversion failed: save the original file with its true extension
+        hint = ""
+        if not self._pillow_can_write(ext):
+            hint = (" (JPEG XL needs the pillow-jxl-plugin package: pip install pillow-jxl-plugin)" if ext == "jxl"
+                    else f" (this Pillow version cannot write {image_formats.label_for(ext)}: update Pillow)")
         self.live_manager.update_log(
             "Conversion warning",
-            f"Failed to convert {original_filename} to {ext} with ImageMagick/Pillow. Saving as {stem}{actual_ext}.",
+            f"Failed to convert {original_filename} to {image_formats.label_for(ext)}{hint}. "
+            f"Saving as {stem}{actual_ext}.",
         )
         fallback_path = Path(self.download_path) / f"{stem}{actual_ext}"
         self._save_bytes(fallback_path, content)
@@ -557,18 +568,10 @@ class AlbumDownloader(CbzArchiveMixin):
 
     def _is_same_file(self, final_path: Path, response: Response, original_filename: str = "") -> bool:
         """Check whether a local file matches the server content length when available."""
-        if self.image_format == "auto" and original_filename:
-            stem = Path(original_filename).stem
-            for ext in (".jpg", ".jpeg", ".webp", ".gif", ".png"):
-                p = Path(self.download_path) / f"{stem}{ext}"
-                if p.exists() and p.stat().st_size > 0:
-                    return True
-            return False
-
         if not final_path.exists():
             return False
 
-        if self.image_format in ("original", "native", "") or (original_filename and final_path.name == original_filename):
+        if self.image_format == "original" or (original_filename and final_path.name == original_filename):
             remote_size = response.headers.get("Content-Length")
             if not remote_size:
                 # If the remote size is not provided, assume the existing file is valid
@@ -614,15 +617,7 @@ class AlbumDownloader(CbzArchiveMixin):
 
     def _is_acceptable_local(self, f: Path, expected_name: str) -> bool:
         """Return True if a local file can be kept as-is for the selected format."""
-        if f.name == expected_name:
-            return True
-        # AUTO keeps animated images in their original format instead of converting to JPG
-        if self.image_format == "auto" and Path(expected_name).stem == f.stem and f.suffix.lower() in (".gif", ".webp"):
-            try:
-                return self._is_image_animated(f.read_bytes())
-            except OSError:
-                return False
-        return False
+        return f.name == expected_name
 
     def _find_and_prepare_local_page(self, page_idx: int) -> bool:
         """Check if image file for page_idx already exists locally (previous run or manual download).

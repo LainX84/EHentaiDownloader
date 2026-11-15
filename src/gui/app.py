@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import queue
+import re
 import threading
 from pathlib import Path
 from tkinter import (
@@ -23,7 +24,7 @@ from src.config import (
     SESSION_LOG,
     SETTINGS_FILE,
 )
-from src import gui_dialogs, paths, throttle, ui_theme
+from src import gui_dialogs, image_formats, paths, throttle, ui_theme
 from src.downloader.cbz_archive import set_comic_info
 from src.file_utils import append_session_banner, append_session_log
 
@@ -39,6 +40,8 @@ from src.gui.style import (
     DIALOG_FONTS, PAD, open_with_system, ts as _ts,
 )
 
+
+_URL_RE = re.compile(r"https?://[^\s<>\"']+[^\s<>\"'.,;:!?)]")  # links in log lines
 
 class EHentaiGUI(  # pylint: disable=too-many-ancestors,too-many-instance-attributes
     LayoutMixin, UrlListMixin, LinkIntakeMixin, WorkersMixin, WhenDoneMixin, UpdatesMixin, tk.Tk,
@@ -292,21 +295,39 @@ class EHentaiGUI(  # pylint: disable=too-many-ancestors,too-many-instance-attrib
             tag = "WARNING"
         elif any(w in low for w in ("success", "complete", "downloaded", "renamed", "created", "ok")):
             tag = "ok"
-        self._log_box.insert(END, f"{details}\n", tag)
+        # Links become clickable (tag "link", see _on_log_link)
+        pos = 0
+        for match in _URL_RE.finditer(details):
+            self._log_box.insert(END, details[pos:match.start()], tag)
+            self._log_box.insert(END, match.group(0), (tag, "link"))
+            pos = match.end()
+        self._log_box.insert(END, f"{details[pos:]}\n", tag)
         self._log_box.see(END)
         self._log_box.configure(state="disabled")
 
+    def _on_log_link(self, event) -> None:
+        """Click on a link of the log: open it (Microsoft Store pages open the Store install window)."""
+        index = self._log_box.index(f"@{event.x},{event.y}")
+        span = self._log_box.tag_prevrange("link", f"{index}+1c")
+        if span:
+            gui_dialogs.open_link(self._log_box.get(*span))
+
     def _on_format_changed(self, _event=None) -> None:
-        """Warn the user that forcing a fixed format drops animations."""
-        new_format = self._format_var.get()
-        if new_format in ("JPG (.jpg)", "PNG (.png)", "WEBP (.webp)"):
-            messagebox.showwarning(
-                "Animated Images Warning",
-                "You selected a fixed image format.\n"
-                "Any animated images in the album (animated WebP/GIF) will lose their animation "
-                "and only the first static frame will be saved.\n\n"
-                "Tip: use 'AUTO' to convert static images to JPG while keeping animations.",
-            )
+        """Tell the user what the chosen format implies (lost animations, codecs needed to view it).
+
+        The reminder always goes to the log (with the install link); the window can be snoozed
+        for FORMAT_NOTICE_SNOOZE_DAYS days for each format.
+        """
+        label = self._format_var.get()
+        name = image_formats.name_from_label(label)
+        line = image_formats.log_line(name)
+        if line:
+            self._append_log(_ts(), "Image Format notice", line)
+        text = image_formats.notice(name)
+        if text and not image_formats.notice_hidden(self._settings, name):
+            if gui_dialogs.show_format_notice(self, self._palette(), DIALOG_FONTS, f"Image Format: {label}", text,
+                                              image_formats.windows_extension(name)):
+                image_formats.hide_notice(self._settings, name)
         self._save_settings()
 
     def _on_speed_changed(self, _value=None) -> None:
@@ -460,17 +481,8 @@ class EHentaiGUI(  # pylint: disable=too-many-ancestors,too-many-instance-attrib
                          if self._comic_info_var.get() else "ComicInfo.xml OFF: new CBZ archives hold only the images.")
 
     def _get_selected_format(self) -> str:
-        """Map the combobox label to the internal format name (auto / original / jpg / png / webp)."""
-        val = self._format_var.get().lower()
-        if "auto" in val:
-            return "auto"
-        if "jpg" in val or "jpeg" in val:
-            return "jpg"
-        if "png" in val:
-            return "png"
-        if "webp" in val and "native" not in val:
-            return "webp"
-        return "original"
+        """Internal format name of the chosen label (original / webp / jpg / jxl / png / avif)."""
+        return image_formats.name_from_label(self._format_var.get())
 
     def _set_buttons_state(self, state: str, editor_editable: bool = False) -> None:
         """Enable or disable every control that must not change during a download.

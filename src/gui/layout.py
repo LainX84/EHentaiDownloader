@@ -19,7 +19,7 @@ from src.config import (
     RENAME_SEQUENTIAL,
 )
 from src.downloader.cbz_archive import set_comic_info
-from src import gui_dialogs, paths, throttle, ui_theme
+from src import gui_dialogs, image_formats, paths, throttle, ui_theme
 from src.config import ISSUES_URL, PROJECT_URL
 
 from src.gui import style
@@ -354,15 +354,10 @@ class LayoutMixin:  # pylint: disable=too-few-public-methods,no-member
         tk.Label(hdr_right, text="Image Format:", bg=style.PANEL, fg=style.TEXT_SEC,
                  font=FONT_SMALL).pack(side="left", padx=(0, 6))
 
-        self._format_options = [
-            "AUTO (JPG / Native if animated)",
-            "Native (Original)",
-            "JPG (.jpg)",
-            "PNG (.png)",
-            "WEBP (.webp)",
-        ]
+        # Default at the first start: WebP (small files, keeps animations); old saved labels are converted
+        self._format_options = list(image_formats.LABELS)
         saved_format = self._settings.get("image_format")
-        initial_format = saved_format if saved_format in self._format_options else self._format_options[0]
+        initial_format = image_formats.normalize_label(saved_format) if saved_format else image_formats.DEFAULT_LABEL
         self._format_var = StringVar(value=initial_format)
 
         self._format_cb = ttk.Combobox(
@@ -370,7 +365,7 @@ class LayoutMixin:  # pylint: disable=too-few-public-methods,no-member
             textvariable=self._format_var,
             values=self._format_options,
             state="readonly",
-            width=28,
+            width=18,
             font=FONT_SMALL,
         )
         self._format_cb.pack(side="left", padx=(0, PAD*2))
@@ -794,6 +789,11 @@ class LayoutMixin:  # pylint: disable=too-few-public-methods,no-member
         self._log_box.tag_configure("warn_banner",    foreground=style.WARN_BANNER,  font=FONT_MONO_BOLD)
         self._log_box.tag_configure("warn_url",       foreground=style.WARN_BANNER,  font=FONT_MONO_BOLD)
         self._log_box.tag_configure("warn_item",      foreground=style.WARNING)
+        # Clickable links (configured last, so their colour wins over the line colour)
+        self._log_box.tag_configure("link", foreground=style.ACCENT, underline=True)
+        self._log_box.tag_bind("link", "<Button-1>", self._on_log_link)
+        self._log_box.tag_bind("link", "<Enter>", lambda _e: self._log_box.configure(cursor="hand2"))
+        self._log_box.tag_bind("link", "<Leave>", lambda _e: self._log_box.configure(cursor=""))
 
     def _on_window_resize(self, event=None) -> None:
         """Dynamically scale log area between ~115px and 350px max when window is resized."""

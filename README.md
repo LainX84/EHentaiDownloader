@@ -10,10 +10,12 @@
 
 ---
 
-## What's new in 2.0.3
+## What's new in 2.0.4
 
-- **CBZ of galleries with very long titles**: on Linux, macOS and Docker the archive could fail with "File name too long" and the album was left as a folder; now the name always fits.
-- **Clear warning when the ExHentai cookies are missing** (desktop and Docker): ExHentai links, and galleries removed from E-Hentai that are still on ExHentai, need your account cookies; the log now says so before the download instead of reporting them as "expired".
+- **New Image Format list** (desktop, Docker / web and CLI): *Native (Original)*, **WEBP (new default)**, *JPEG*, *JPEG XL*, *PNG*, *AVIF*. *AUTO* has been removed.
+- **WEBP and AVIF keep animations**; choosing JPEG, JPEG XL or PNG warns that animated images keep only their first frame, and AVIF / JPEG XL explain which codecs are needed on Windows, Linux and macOS. All the formats are open standards and royalty-free.
+- **Clickable links in the log** (desktop and web).
+- Docker / web: the *Open Downloads* button, which the web version is not meant to have, has been removed.
 
 All changes, also of earlier versions: [CHANGELOG.md](CHANGELOG.md).
 
@@ -29,10 +31,10 @@ All changes, also of earlier versions: [CHANGELOG.md](CHANGELOG.md).
 - 📥 **Quick link input**: paste text with links (Ctrl+V in the batch list), drag links or text files onto the window, or let the clipboard watcher collect every gallery link you copy.
 - 🗂️ **One folder per site**: `Downloads/E-Hentai/<title>` and `Downloads/nhentai/<title>` (or `.cbz`). Albums and archives made by older versions directly in `Downloads/` are still recognised.
 - 🖼️ **Image format conversion**
-  - **AUTO** (default): static images are converted to `.jpg`, animated images (animated GIF/WebP) keep their original format.
-  - **Native**: save exactly what the server sends.
-  - **JPG / PNG / WEBP**: force one format (animations are reduced to their first frame).
-  - Uses **ImageMagick** when installed, otherwise **Pillow**.
+  - **Native (Original)**: each image is saved exactly as the server sends it, without any change.
+  - **WEBP** (default), **JPEG**, **JPEG XL**, **PNG**, **AVIF**: every image is converted to that format. WEBP and AVIF keep animations; with the others animated images keep only their first frame (you are warned when you choose them).
+  - All the formats offered are **open standards and royalty-free**.
+  - Uses **Pillow** (with `pillow-jxl-plugin` for JPEG XL), or **ImageMagick** when installed. Details: [Image formats](#image-formats).
 - 🔢 **Sequential renaming**: when an album is fully downloaded, images are renamed `01…N`. The number of digits depends on the image count: up to 99 → 2 digits (`01`), up to 999 → 3 (`001`), up to 9999 → 4 (`0001`)… Toggle it in **Settings → Auto Rename**.
 - 📚 **CBZ archives** (optional): each completed album is saved as a single `Downloads/<site>/<gallery title>.cbz` (no album folder), pages named `01…N` (zero-padded so every reader shows them in order) plus, if you want, a `ComicInfo.xml` (**Settings → ComicInfo.xml in CBZ**, OFF by default); the images and their temp folder are deleted only after the archive is verified (if it cannot be made, the album is saved as a normal folder). Toggle it in **Settings → CBZ archive**. Albums already archived are skipped on later runs.
 - ✅ **Completeness check**: an album counts as complete only if every page is really on disk; otherwise it goes to the retry queue.
@@ -74,7 +76,7 @@ Where the app keeps its files (`Downloads/`, `temp/`, `URLs.txt`, `cookies.json`
 ## Requirements (to run from the source code)
 
 - **Python 3.10+** (with Tkinter, included in the official Windows/macOS installers; on Linux install it with the system package, e.g. `sudo apt install python3-tk` on Debian/Ubuntu, `sudo dnf install python3-tkinter` on Fedora)
-- Python packages: `beautifulsoup4`, `requests`, `rich`, `Pillow`, and `tkinterdnd2` for drag and drop (optional: without it everything else works)
+- Python packages: `beautifulsoup4`, `requests`, `rich`, `Pillow` (11.3 or later, for AVIF), `pillow-jxl-plugin` (JPEG XL), and `tkinterdnd2` for drag and drop (optional: without it everything else works)
 - *(Optional)* [ImageMagick](https://imagemagick.org/script/download.php) in the system `PATH` for faster conversions
 
 ---
@@ -214,13 +216,32 @@ A gallery link always ends with a **10-character token** (`/g/<number>/<token>/`
 
 ## Image formats
 
-| Mode | Result |
-| :--- | :--- |
-| **AUTO** (default) | Static images → `.jpg`; animated GIF/WebP keep their format and animation. |
-| **Native (Original)** | Whatever the server provides (`.webp`, `.jpg`, `.png`, `.gif`…), no conversion. |
-| **JPG** | Everything converted to JPEG (animations keep only the first frame). |
-| **PNG** | Everything converted to PNG (animations keep only the first frame). |
-| **WEBP** | Everything converted to WebP. |
+| Mode | Result | Animations |
+| :--- | :--- | :---: |
+| **Native (Original)** | Each image saved exactly as the server sends it (`.webp`, `.jpg`, `.png`, `.gif`…), without any change. | ✅ kept as they are |
+| **WEBP** (default) | Everything converted to WebP: small files, read everywhere. | ✅ animated WebP, same timing |
+| **JPEG** | Everything converted to JPEG (`.jpg`). | ❌ first frame only |
+| **JPEG XL** | Everything converted to JPEG XL (`.jxl`). | ❌ first frame only ¹ |
+| **PNG** | Everything converted to PNG (lossless, big files). | ❌ first frame only |
+| **AVIF** | Everything converted to AVIF: very small files. | ✅ animated AVIF, same timing |
+
+WEBP is the format chosen at the first start; the choice is then remembered. Choosing a format that drops animations, or one that needs extra codecs to be viewed, shows a notice; tick *Don't show this again for 30 days* to skip it (for that format). A short reminder is always written in the log, with the install link when Windows needs an extension.
+
+¹ JPEG XL can hold animations, but the library used to write it (`pillow-jxl-plugin`) saves still images only.
+
+**Open formats.** All the formats offered — WebP, JPEG, JPEG XL, PNG and AVIF — are open standards and royalty-free: no license or fee is needed to create or open the files.
+
+**AVIF and JPEG XL need codecs to be viewed.** The program converts the images by itself (the support is included in the app and in `requirements.txt`), but many systems cannot open these files out of the box:
+
+| System | AVIF | JPEG XL |
+| :--- | :--- | :--- |
+| **Windows** | Install the free [*AV1 Video Extension*](https://apps.microsoft.com/detail/9mvzqvxjbq9v) from the Microsoft Store | Install the free [*JPEG XL Image Extension*](https://apps.microsoft.com/detail/9mzprth5c0tb) from the Microsoft Store (Windows 11 24H2 or later) |
+| **Linux** | `libavif` and the AVIF plug-in of your image viewer, if missing | `libjxl` and the JPEG XL plug-in of your image viewer, if missing |
+| **macOS** | Built in from macOS 13 Ventura | Built in from macOS 14 Sonoma |
+
+On Windows the install link in the notice and in the log opens just the small install window of the Microsoft Store (not the whole Store app); press *Get* there. Without the Store app the product page opens in the browser. From a terminal you can also run `winget install 9MVZQVXJBQ9V` (AVIF) or `winget install 9MZPRTH5C0TB` (JPEG XL).
+
+Comic readers and CBZ apps may not show AVIF / JPEG XL images either: check yours before choosing them.
 
 ### Building the app yourself
 
@@ -234,8 +255,8 @@ The archive for your system is written to `release/` (PyInstaller can only build
 **Publishing a release** (maintainers): set `APP_VERSION` in `src/config.py`, add a section to `CHANGELOG.md`, commit, then push a tag with the same version:
 
 ```bash
-git tag v2.0.3
-git push origin v2.0.3
+git tag v2.0.4
+git push origin v2.0.4
 ```
 
 The GitHub workflow `.github/workflows/release.yml` builds Windows, macOS (Apple Silicon and Intel) and Linux on GitHub's servers and attaches the four archives to a new release with generated notes. *Actions → Build release → Run workflow* makes a test build without publishing (the archives can be downloaded from the run page).
@@ -254,7 +275,7 @@ All settings are in [`src/config.py`](src/config.py):
 | `DONE_LINE_REMOVE_DELAY` | `45` | Seconds a downloaded (green) line stays in the batch list before being removed. |
 | `MAX_WORKERS` | `5` | Upper limit of images downloaded in parallel (the speed level picks 1…5). |
 | `DEFAULT_SPEED` | `3` | Speed level on first start and for the CLI: 1 Very slow (4 s between page requests, 1 download), 2 Slow (2.5 s, 2), 3 Normal (1.5 s, 3), 4 Fast (0.8 s, 4), 5 Very fast (0.3 s, 5). |
-| `DEFAULT_IMAGE_FORMAT` | `auto` | Format used by the command-line scripts. |
+| `DEFAULT_IMAGE_FORMAT` | `webp` | Format at the first start of the window / web page and for the command-line scripts: `original`, `webp`, `jpg`, `jxl`, `png` or `avif`. |
 | `RENAME_SEQUENTIAL` | `True` | Rename images `01…N` when an album is complete (initial state of the GUI button on first start). |
 | `CREATE_CBZ` | `False` | Save each completed album as `Downloads/<site>/<gallery title>.cbz` instead of a folder (initial state of the GUI button on first start; also used by the CLI). |
 | `CBZ_COMIC_INFO` | `False` | Put a `ComicInfo.xml` inside each CBZ (initial state of the GUI option on first start; also used by the CLI). |
@@ -332,6 +353,7 @@ EHentaiDownloader/
     ├── config.py            # All settings
     ├── file_utils.py        # Files, folder names, session log + rotation
     ├── general_utils.py     # HTTP session, cookies, page fetching with retries & diagnostics
+    ├── image_formats.py     # Image Format choices, default (WebP) and their notices
     ├── nhentai.py           # nhentai: link check, gallery data (API v2 / page), image servers
     ├── throttle.py          # Speed levels (request pacing) and temporary IP-ban / rate-limit pause
     ├── paths.py             # Data folder and bundled files (source code or packaged app)

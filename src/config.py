@@ -24,7 +24,8 @@ KB = 1024             # Number of bytes in a kilobyte.
 CHUNK_SIZE = 16 * KB  # The size of each chunk when downloading files.
 MAX_WORKERS = 5       # Upper limit of concurrent image downloads (the speed level picks 1..5).
 DEFAULT_SPEED = 3     # Start speed: 1 Very slow, 2 Slow, 3 Normal, 4 Fast, 5 Very fast (GUI slider).
-DEFAULT_IMAGE_FORMAT = "auto"  # CLI default. Options: "auto", "original", "jpg", "png", "webp"
+# Default format (desktop and web at first start, CLI). Options: "original", "webp", "jpg", "jxl", "png", "avif"
+DEFAULT_IMAGE_FORMAT = "webp"
 RENAME_SEQUENTIAL = True  # Rename images to 01..N (padding sized on N) when the album is complete.
 CREATE_CBZ = False        # Save each completed album as "Downloads/<title>.cbz" instead of a folder of images.
 CBZ_COMIC_INFO = False    # Also put a ComicInfo.xml (title, page count, source link) inside each CBZ.
@@ -44,11 +45,12 @@ NHENTAI_BLOCK_EXTRA_WAIT = (10, 15)  # Random extra seconds after the wait asked
 NHENTAI_BLOCK_DEFAULT_WAIT = 60      # Wait used when nhentai does not say how long (no Retry-After).
 NHENTAI_API_INTERVAL = 3.2      # Min. seconds between nhentai API requests (site limit: 20/min per IP).
 NHENTAI_API_INTERVAL_KEY = 1.4  # Same, with an nhentai API key in cookies.json (limit: 45/min per IP).
-APP_VERSION = "2.0.3"           # Shown next to the program name and in Help → About; release tags are v<APP_VERSION>.
+APP_VERSION = "2.0.4"           # Shown next to the program name and in Help → About; release tags are v<APP_VERSION>.
 PROJECT_URL = "https://github.com/LainX84/EHentaiDownloader"
 ISSUES_URL = f"{PROJECT_URL}/issues"
 UPSTREAM_URL = "https://github.com/Lysagxra/EHentaiDownloader"
 DISCLAIMER_SNOOZE_DAYS = 30     # "Don't show again" hides the start-up notice for this many days.
+FORMAT_NOTICE_SNOOZE_DAYS = 30  # "Don't show again" hides the notice of an image format for this many days.
 NHENTAI_MAX_MIRRORS = 4         # Mirrors tried per image before giving up on it (until 'Retry Failed').
 NHENTAI_IMAGE_DELAY = (0.4, 1.2)  # Random pause (seconds) after each image, per download thread.
 

@@ -125,7 +125,7 @@ $$(".tab").forEach((t) => t.addEventListener("click", () => showTab(t.dataset.ta
 try { showTab(localStorage.getItem("ehd-tab") || "single"); } catch (_) { showTab("single"); }
 
 const actions = {
-  files: showFiles, logfile: showLogFile, account: showAccount, updates: checkUpdates,
+  logfile: showLogFile, account: showAccount, updates: checkUpdates,
   disclaimer: () => showDisclaimer(false), license: showLicense, about: showAbout,
 };
 $$("[data-action]").forEach((b) => b.addEventListener("click", () => actions[b.dataset.action]()));
@@ -159,13 +159,22 @@ $$("[data-setting]").forEach((cb) => cb.addEventListener("change", () => changeS
 $$("input[name=theme]").forEach((r) => r.addEventListener("change", () => changeSetting({ theme: r.value })));
 $("#format").addEventListener("change", async () => {
   const value = $("#format").value;
-  if (/^(JPG|PNG|WEBP)/.test(value)) {
-    await alertBox("Animated Images Warning",
-      "You selected a fixed image format.\nAny animated images in the album (animated WebP/GIF) will lose their " +
-      "animation and only the first static frame will be saved.\n\nTip: use 'AUTO' to convert static images to JPG " +
-      "while keeping animations.");
+  const notice = (S.info.format_notices || {})[value];
+  const hidden = (S.settings && S.settings.format_notices_hidden) || [];
+  let snoozed = false;
+  if (notice && !hidden.includes(value)) {
+    const body = el("div", {}, el("pre", { class: "textbox", text: notice }));
+    const ext = (S.info.format_extensions || {})[value];
+    if (ext) body.append(el("p", { class: "note" }, storeLink(ext.page, `⬇ Install ${ext.name} (Microsoft Store, free)`)));
+    const snooze = el("input", { type: "checkbox" });
+    body.append(el("label", { class: "note" }, snooze, ` Don't show this again for ${S.info.format_notice_snooze_days} days`));
+    await modal(`Image Format: ${value}`, body, [{ label: "OK", value: true, cls: "accent" }]);
+    snoozed = snooze.checked;
   }
-  changeSetting({ image_format: value });
+  await changeSetting({ image_format: value });
+  if (snoozed) {
+    try { S.settings = await api("/api/format-notice", { format: value }); applySettings(); } catch (err) { showError(err); }
+  }
 });
 $("#speed-label").addEventListener("click", (e) => {
   e.stopPropagation();
@@ -349,6 +358,28 @@ $("#retry-start").addEventListener("click", async () => {
 
 // ------------------------------------------------------------------ log
 
+// Microsoft Store page: on Windows open only the small install window of the Store app,
+// elsewhere the web page of the product
+const IS_WINDOWS = /Windows/i.test(navigator.userAgent);
+function storeLink(url, text) {
+  const id = (url.match(/^https:\/\/apps\.microsoft\.com\/detail\/([a-z0-9]+)/i) || [])[1];
+  const href = id && IS_WINDOWS ? `ms-windows-store://pdp/?ProductId=${id.toUpperCase()}&mode=mini` : url;
+  return el("a", { href, target: "_blank", rel: "noopener", text: text || url });
+}
+
+// Log text with clickable links
+const URL_RE = /https?:\/\/[^\s<>"']+[^\s<>"'.,;:!?)]/g;
+function linkify(text) {
+  const span = el("span", { class: "l-d" });
+  let pos = 0;
+  for (const m of text.matchAll(URL_RE)) {
+    span.append(text.slice(pos, m.index), storeLink(m[0]));
+    pos = m.index + m[0].length;
+  }
+  span.append(text.slice(pos));
+  return span;
+}
+
 function appendLog(items, reset) {
   const box = $("#log");
   const atBottom = box.scrollTop + box.clientHeight >= box.scrollHeight - 8;
@@ -356,7 +387,7 @@ function appendLog(items, reset) {
   for (const it of items) {
     const row = el("div", { class: it.tag }, el("span", { class: "l-ts", text: `[${it.ts}] ` }));
     if (it.event) row.append(el("span", { class: "l-ev", text: `${it.event}: ` }));
-    row.append(el("span", { class: "l-d", text: it.details }));
+    row.append(linkify(it.details || ""));
     box.append(row);
   }
   while (box.childElementCount > 3000) box.firstChild.remove();
@@ -468,29 +499,6 @@ document.addEventListener("visibilitychange", () => { if (!document.hidden) poll
 
 // ------------------------------------------------------------------ dialogs
 
-async function showFiles() {
-  let data;
-  try { data = await api("/api/files"); } catch (err) { showError(err); return; }
-  const body = el("div", { class: "files" },
-    el("p", { class: "note", text: `Folder on the server: ${S.info.about.data_dir} (E-Hentai/, nhentai/, temp/ = albums not finished yet).` }));
-  for (const [folder, entries] of Object.entries(data)) {
-    body.append(el("div", { class: "folder-title", text: `${folder}/ (${entries.length})` }));
-    if (!entries.length) { body.append(el("div", { class: "note", text: "empty" })); continue; }
-    const table = el("table", {}, el("tr", {}, el("th", { text: "Name" }), el("th", { text: "Size" }), el("th", { text: "Date" })));
-    for (const e of entries.slice(0, 300)) {
-      const name = e.dir || folder === "temp"
-        ? el("span", { text: `${e.dir ? "📁 " : ""}${e.name}` })
-        : el("a", { href: `/api/files/download?folder=${encodeURIComponent(folder)}&name=${encodeURIComponent(e.name)}`, text: e.name });
-      table.append(el("tr", {}, el("td", {}, name),
-        el("td", { class: "num", text: fmtSize(e.size) + (e.dir ? ` · ${e.files} files` : "") }),
-        el("td", { class: "num", text: new Date(e.mtime * 1000).toLocaleString() })));
-    }
-    body.append(table);
-    if (entries.length > 300) body.append(el("div", { class: "note", text: `… and ${entries.length - 300} more` }));
-  }
-  modal("Downloads", body, [{ label: "Close", value: true, cls: "accent" }]);
-}
-
 async function showLogFile() {
   let text;
   try { text = await api("/api/log/file"); } catch (err) { showError(err); return; }
@@ -594,7 +602,8 @@ function showAbout() {
         "Web version for Docker: the downloads run in the server, also with the browser closed.", "",
         `This version: ${i.project_url}`, `Original project: ${i.upstream_url}`,
         "Developed and modified with the help of Claude AI (Anthropic).",
-        "Free software under the GPL-3.0 license, provided as is, without warranty.", "",
+        "Free software under the GPL-3.0 license, provided as is, without warranty.",
+        i.open_formats_note, "",
         `Data folder: ${i.about.data_dir}`, `Settings and lists: ${i.about.config_dir}`,
         `Python ${i.about.python} · ${i.about.system}`].join("\n") })));
   modal(`About ${i.name}`, body, [{ label: "Close", value: true, cls: "accent" }]);

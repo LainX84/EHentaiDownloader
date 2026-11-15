@@ -1,7 +1,7 @@
 """nhentai.net album downloader.
 
 Reuses everything of AlbumDownloader that is not site-specific: temp folder and resume,
-format conversion (AUTO / JPG / PNG / WEBP / original), sequential renaming, CBZ archive,
+format conversion (original / WEBP / JPEG / JPEG XL / PNG / AVIF), sequential renaming, CBZ archive,
 moving the finished album to Downloads. Only reading the gallery and fetching the images
 are different.
 """
@@ -15,7 +15,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests
 
-from src import nhentai, throttle
+from src import image_formats, nhentai, throttle
 from src.config import (
     CHUNK_SIZE,
     CONNECTION_TIMEOUT,
@@ -61,7 +61,7 @@ class NHentaiAlbumDownloader(AlbumDownloader):
             raise ValueError(url_error)
         self.url = nhentai.canonical_url(url)
         self.live_manager = live_manager
-        self.image_format = (image_format or "original").lower().strip()
+        self.image_format = image_formats.normalize_name(image_format)
         self.session = nhentai.create_nhentai_session()
         self.info = nhentai.fetch_gallery_info(self.url, session=self.session)
 

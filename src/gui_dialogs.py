@@ -6,6 +6,7 @@ styles configured by the main window, so they follow the light / dark theme.
 
 from __future__ import annotations
 
+import os
 import platform
 import sys
 import time
@@ -14,8 +15,10 @@ import webbrowser
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
-from src import cookie_import, paths
-from src.config import APP_VERSION, DISCLAIMER_SNOOZE_DAYS, ISSUES_URL, PROJECT_URL, UPSTREAM_URL
+from src import cookie_import, image_formats, paths
+from src.image_formats import OPEN_FORMATS_NOTE
+from src.config import (APP_VERSION, DISCLAIMER_SNOOZE_DAYS, FORMAT_NOTICE_SNOOZE_DAYS, ISSUES_URL, PROJECT_URL,
+                        UPSTREAM_URL)
 from src.texts import APP_NAME, DISCLAIMER_TEXT, DISCLAIMER_TITLE, THIRD_PARTY_TEXT  # noqa: F401
 
 
@@ -25,6 +28,27 @@ def open_url(url: str) -> None:
         webbrowser.open(url, new=2)
     except Exception as err:  # pylint: disable=broad-except
         messagebox.showerror("Open link", f"Could not open the browser:\n{err}\n\nLink: {url}")
+
+
+def open_store_page(product_id: str) -> None:
+    """Microsoft Store product: on Windows only the small install window of the Store app opens,
+    elsewhere (or if the Store app is missing) its web page opens in the browser."""
+    if sys.platform == "win32":
+        try:
+            os.startfile(image_formats.store_app_url(product_id))  # pylint: disable=no-member
+            return
+        except OSError:
+            pass
+    open_url(image_formats.store_page_url(product_id))
+
+
+def open_link(url: str) -> None:
+    """Open a link of the log or of a window (Microsoft Store pages go to the Store install window)."""
+    product_id = image_formats.product_id_from_url(url)
+    if product_id:
+        open_store_page(product_id)
+    else:
+        open_url(url)
 
 
 def _dialog(root, title: str, palette: dict, width: int, height: int) -> tk.Toplevel:
@@ -122,6 +146,45 @@ def show_disclaimer(root, palette: dict, fonts: dict, settings: dict, save_setti
     return result["accepted"]
 
 
+# ---------------------------------------------------------------- image format notice
+
+def show_format_notice(root, palette: dict, fonts: dict, title: str, text: str, extension) -> bool:
+    """Notice of an image format, with the Windows extension to install (if any).
+    Returns True when "Don't show this again" was ticked."""
+    win = _dialog(root, title, palette, 620, 430 if extension else 300)
+    body = tk.Frame(win, bg=palette["BG"])
+    body.pack(fill="both", expand=True, padx=16, pady=(14, 8))
+    tk.Label(body, text=f"ℹ  {title}", bg=palette["BG"], fg=palette["TEXT"],
+             font=fonts["head"]).pack(anchor="w", pady=(0, 8))
+    _text_box(body, palette, fonts, text, height=12 if extension else 5)
+
+    if extension:
+        name, page_url, _ = extension
+        product_id = image_formats.product_id_from_url(page_url)
+        row = tk.Frame(win, bg=palette["BG"])
+        row.pack(fill="x", padx=16)
+        tk.Button(row, text=f"⬇  Install {name} (Microsoft Store, free)", bg=palette["BG"], fg=palette["ACCENT"],
+                  font=fonts["small"], relief="flat", cursor="hand2", bd=0, activebackground=palette["BG"],
+                  activeforeground=palette["ACCENT2"],
+                  command=lambda: open_store_page(product_id)).pack(side="left")
+
+    bottom = tk.Frame(win, bg=palette["BG"])
+    bottom.pack(fill="x", padx=16, pady=(8, 14))
+    snooze = tk.BooleanVar(value=False)
+    tk.Checkbutton(
+        bottom, text=f"Don't show this again for {FORMAT_NOTICE_SNOOZE_DAYS} days", variable=snooze,
+        bg=palette["BG"], fg=palette["TEXT_SEC"], font=fonts["small"], activebackground=palette["BG"],
+        activeforeground=palette["TEXT"], selectcolor=palette["PANEL"], highlightthickness=0,
+    ).pack(side="left")
+    ttk.Button(bottom, text="OK", style="Accent.TButton", command=win.destroy).pack(side="right")
+    win.protocol("WM_DELETE_WINDOW", win.destroy)
+    win.bind("<Return>", lambda _e: win.destroy())
+    win.grab_set()
+    win.focus_set()
+    root.wait_window(win)
+    return bool(snooze.get())
+
+
 # ---------------------------------------------------------------- license / about
 
 def show_license(root, palette: dict, fonts: dict) -> None:
@@ -144,7 +207,7 @@ def show_license(root, palette: dict, fonts: dict) -> None:
 
 def show_about(root, palette: dict, fonts: dict) -> None:
     """Name, credits, AI notice, links and versions."""
-    win = _dialog(root, f"About {APP_NAME}", palette, 600, 460)
+    win = _dialog(root, f"About {APP_NAME}", palette, 600, 490)
     body = tk.Frame(win, bg=palette["BG"])
     body.pack(fill="both", expand=True, padx=20, pady=16)
     top = tk.Frame(body, bg=palette["BG"])
@@ -163,12 +226,13 @@ def show_about(root, palette: dict, fonts: dict) -> None:
         f"Original project: {UPSTREAM_URL}",
         "Developed and modified with the help of Claude AI (Anthropic).",
         "Free software under the GPL-3.0 license, provided as is, without warranty.",
+        OPEN_FORMATS_NOTE,
         "",
         f"Data folder: {paths.app_dir()}",
         f"Python {platform.python_version()} · Tk {root.tk.call('info', 'patchlevel')} · {platform.system()} {platform.release()}",
     )
     tk.Label(body, text="\n".join(lines), bg=palette["BG"], fg=palette["TEXT_SEC"], font=fonts["small"],
-             justify="left", anchor="w").pack(anchor="w", pady=(8, 12), fill="x")
+             justify="left", anchor="w", wraplength=550).pack(anchor="w", pady=(8, 12), fill="x")
     row = tk.Frame(body, bg=palette["BG"])
     row.pack(fill="x", side="bottom")
     ttk.Button(row, text="GitHub page", style="Ghost.TButton", command=lambda: open_url(PROJECT_URL)).pack(side="left")

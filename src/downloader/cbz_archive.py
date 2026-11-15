@@ -15,7 +15,7 @@ from src.file_utils import MAX_NAME_BYTES, sanitize_directory_name
 
 PART_SUFFIX = ".part"  # same ending as AlbumDownloader._part_path
 
-IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".avif"}
+IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".avif", ".jxl"}
 
 # Whether ComicInfo.xml is written into new CBZ files. The GUI sets it from
 # Settings → "ComicInfo.xml in CBZ"; the CLI uses CBZ_COMIC_INFO from src/config.py.

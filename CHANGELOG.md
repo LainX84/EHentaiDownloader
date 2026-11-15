@@ -4,6 +4,32 @@ All notable changes to this fork of EHentai Downloader. Versions follow the rele
 (`v<version>`); the ready-to-use apps of each version are on the
 [releases page](https://github.com/LainX84/EHentaiDownloader/releases).
 
+## [2.0.4] – 2026-11-15
+
+### Changed
+- **New Image Format list** (desktop, Docker / web and CLI): *Native (Original)*, *WEBP*,
+  *JPEG*, *JPEG XL*, *PNG*, *AVIF*. **WEBP is the default** at the first start. *AUTO* has been
+  removed (a saved AUTO choice becomes WEBP, a saved *JPG* becomes *JPEG*).
+  - *Native (Original)* saves each image exactly as the server sends it, without any change.
+  - WEBP and AVIF keep animations (animated GIF / WebP), with each frame's timing.
+  - Choosing JPEG, JPEG XL or PNG warns that animated images keep only their first frame; choosing
+    AVIF or JPEG XL explains which codecs are needed to view them on Windows, Linux and macOS.
+    The notice has *Don't show this again for 30 days* (for each format); a short reminder is
+    always written in the log.
+  - Windows extension links (AV1 Video Extension, JPEG XL Image Extension) in the notice and in
+    the log: on Windows they open only the small install window of the Microsoft Store.
+  - Links in the log (desktop and web) are now clickable.
+  - README and *About*: all the formats offered are open standards and royalty-free.
+
+### Added
+- **JPEG XL** (`.jxl`, through `pillow-jxl-plugin`) and **AVIF** (`.avif`, built into Pillow
+  11.3+) output formats. Requirements: `Pillow>=11.3.0`, `pillow-jxl-plugin`.
+
+### Fixed
+- Docker / web: removed the *Open Downloads* button and the *File → Open Downloads folder*
+  entry (with the file list behind them), which were still in the page although the web
+  version is not meant to have them: the albums are in the `/data` folder of the server.
+
 ## [2.0.3] – 2026-11-14
 
 ### Fixed
@@ -116,6 +142,8 @@ First release of the fork with ready-to-use apps.
 - **Start-up notice** (disclaimer: no warranty, developed with the help of Claude AI) with
   *Don't show this again for 30 days*; *Help* menu with GitHub page, license and about.
 
+[2.0.4]: https://github.com/LainX84/EHentaiDownloader/compare/v2.0.3...v2.0.4
+[2.0.3]: https://github.com/LainX84/EHentaiDownloader/compare/v2.0.2...v2.0.3
 [2.0.2]: https://github.com/LainX84/EHentaiDownloader/compare/v2.0.1...v2.0.2
 [2.0.1]: https://github.com/LainX84/EHentaiDownloader/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/LainX84/EHentaiDownloader/releases/tag/v2.0.0
