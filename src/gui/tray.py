@@ -69,7 +69,7 @@ def _x11_tray_owner() -> bool:
 
 def _status_notifier_watcher() -> bool:
     """Linux AppIndicator: True when a StatusNotifier host runs on the session bus."""
-    from gi.repository import Gio, GLib  # pylint: disable=import-outside-toplevel
+    from gi.repository import Gio, GLib  # pylint: disable=import-outside-toplevel,import-error  # optional (PyGObject)
 
     bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
     reply = bus.call_sync("org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus",
