@@ -10,6 +10,7 @@ import os
 import queue
 import re
 import threading
+from collections import deque
 from pathlib import Path
 from tkinter import (
     END,
@@ -17,18 +18,21 @@ from tkinter import (
 )
 import tkinter as tk
 
+from src import config
 from src.config import (
     AUTOSAVE_INTERVAL,
-    DOWNLOAD_FOLDER,
     DEFAULT_SPEED,
     SESSION_LOG,
     SETTINGS_FILE,
 )
-from src import gui_dialogs, image_formats, paths, throttle, ui_theme
+from src import gui_dialogs, image_formats, paths, stats, tags as tag_utils, throttle, ui_theme
 from src.downloader.cbz_archive import set_comic_info
 from src.file_utils import append_session_banner, append_session_log
 
 from src.gui.layout import LayoutMixin
+from src.gui.queue_view import QueueViewMixin
+from src.gui.stats_tab import StatsTabMixin
+from src.gui.tray import TrayMixin
 from src.gui.url_list import UrlListMixin
 from src.gui.link_intake import LinkIntakeMixin
 from src.gui.updates import UpdatesMixin
@@ -44,7 +48,8 @@ from src.gui.style import (
 _URL_RE = re.compile(r"https?://[^\s<>\"']+[^\s<>\"'.,;:!?)]")  # links in log lines
 
 class EHentaiGUI(  # pylint: disable=too-many-ancestors,too-many-instance-attributes
-    LayoutMixin, UrlListMixin, LinkIntakeMixin, WorkersMixin, WhenDoneMixin, UpdatesMixin, tk.Tk,
+    LayoutMixin, UrlListMixin, QueueViewMixin, StatsTabMixin, LinkIntakeMixin, WorkersMixin, WhenDoneMixin,
+    UpdatesMixin, TrayMixin, tk.Tk,
 ):
     """Main application window: header, three tabs (Single / Batch / Retry), progress bars and log."""
 
@@ -80,7 +85,7 @@ class EHentaiGUI(  # pylint: disable=too-many-ancestors,too-many-instance-attrib
         # when lines above it are added or removed.
         self._batch_lock = threading.Lock()
         # tasks waiting for the downloader, one queue (lane) per site: they download in parallel
-        self._batch_queues: dict[str, queue.Queue] = {}
+        self._batch_queues: dict[str, deque] = {}
         self._lane_running: dict[str, bool] = {}           # lane -> its worker thread is running
         self._batch_result: dict = {"started": 0, "success": True, "failed": {}}
         self._batch_options: tuple = ()                   # (image format, rename, cbz) of the batch
@@ -107,6 +112,11 @@ class EHentaiGUI(  # pylint: disable=too-many-ancestors,too-many-instance-attrib
 
         # GUI choices saved at the last run (format, Auto Rename, CBZ archive)
         self._settings = self._load_settings()
+        self._apply_download_folder(self._settings.get("download_folder") or "", initial=True)
+        tag_utils.set_favorites(self._settings.get("favorite_tags") or [])
+        tag_utils.set_folders_enabled(bool(self._settings.get("tag_folders", False)))
+        stats.load()
+        atexit.register(stats.save, True)
 
         # Download speed (slider) and temporary IP-ban pause, shared with the worker threads
         try:
@@ -116,6 +126,7 @@ class EHentaiGUI(  # pylint: disable=too-many-ancestors,too-many-instance-attrib
         self._ban_until = 0.0        # monotonic end of the current ban (0 = not banned)
         self._ban_tick_job = None
         throttle.add_ban_listener(lambda until: self._q.put(("BAN", until)))
+        throttle.add_network_listener(lambda online: self._q.put(("NETWORK", online)))
 
         # Theme: "auto" (follow the system), "light" or "dark"
         self._theme_choice = tk.StringVar(
@@ -127,6 +138,7 @@ class EHentaiGUI(  # pylint: disable=too-many-ancestors,too-many-instance-attrib
         self._setup_styles()
         self._build_menu()
         self._build_ui()
+        self._set_menu_options_state("normal")
         self._refresh_speed_label()
         self._apply_theme(ui_theme.resolve(self._theme_choice.get()), initial=True)
         self.after(60_000, self._follow_system_theme)
@@ -134,12 +146,14 @@ class EHentaiGUI(  # pylint: disable=too-many-ancestors,too-many-instance-attrib
         self._poll_queue()
         self.after(AUTOSAVE_INTERVAL * 1000, self._autosave_tick)
         self._estimate_tick()
+        self._stats_tick()
         if not self._setup_drag_and_drop():
             logging.info("Drag and drop is off (tkinterdnd2 not installed or not supported here).")
         if self._watch_clipboard_var.get():
             self._clipboard_seen = self._clipboard_text()
             self._clipboard_job = self.after(1000, self._clipboard_tick)
         self.bind("<Configure>", self._on_window_resize)
+        self._tray_init()
         self.protocol("WM_DELETE_WINDOW", self._on_window_close)
         atexit.register(self._on_exit)
 
@@ -219,6 +233,7 @@ class EHentaiGUI(  # pylint: disable=too-many-ancestors,too-many-instance-attrib
                     self._on_verify_done(*msg[1:])
                 elif msg_type == "BATCH_SCAN":
                     self._scan_batch_editor()
+                    self._sync_batch_order()
                     msg[1].set()  # the lane that asked is waiting for this scan
                 elif msg_type == "TASK_ACTIVE":
                     _, task_id, cur_idx, total_cnt, label = msg
@@ -266,11 +281,19 @@ class EHentaiGUI(  # pylint: disable=too-many-ancestors,too-many-instance-attrib
                     self._status_var.set(msg[1])
                 elif msg_type == "BAN":
                     self._on_ban_changed(msg[1])
+                elif msg_type == "NETWORK":
+                    # Internet connection lost (False) / back (True): the downloads wait meanwhile
+                    self._status_var.set("▶ Internet connection back: downloads resumed." if msg[1] else
+                                         "📡 Internet connection lost: downloads wait until it is back "
+                                         f"(checked every {throttle.NETWORK_CHECK_INTERVAL} s).")
+                    self._status_lbl.configure(foreground=style.TEXT_SEC if msg[1] else style.WARNING)
                 elif msg_type == "IMAGE_SAVED":
                     self._session_images += 1
                     self._refresh_session_counter()
                 elif msg_type == "UPDATE":
                     self._on_update_result(msg[1], msg[2], msg[3])
+                elif msg_type == "TRAY":
+                    self._on_tray_action(msg[1])
         except queue.Empty:
             pass
         # While a batch runs, hand newly added lines to it (about twice a second)
@@ -451,6 +474,9 @@ class EHentaiGUI(  # pylint: disable=too-many-ancestors,too-many-instance-attrib
             "comic_info": bool(self._comic_info_var.get()),
             "watch_clipboard": bool(self._watch_clipboard_var.get()),
             "check_updates": bool(self._check_updates_var.get()),
+            "tag_folders": bool(self._tag_folders_var.get()),
+            "minimize_to_tray": bool(self._minimize_to_tray_var.get()),
+            "favorite_tags": tag_utils.get_favorites(),
         })
         path = Path(SETTINGS_FILE)
         tmp = path.with_name(f"{path.name}.part")
@@ -480,6 +506,96 @@ class EHentaiGUI(  # pylint: disable=too-many-ancestors,too-many-instance-attrib
         self._append_log(_ts(), "Settings", "ComicInfo.xml ON: new CBZ archives include title, tags and source link."
                          if self._comic_info_var.get() else "ComicInfo.xml OFF: new CBZ archives hold only the images.")
 
+    # ------------------------------------------------------------------ download folder
+
+    def _apply_download_folder(self, folder: str, initial: bool = False) -> bool:
+        """Use folder for the finished albums ('' = the default "Downloads" of the program folder)."""
+        if folder:
+            path = Path(folder).expanduser()
+            try:
+                path.mkdir(parents=True, exist_ok=True)
+            except OSError as err:
+                message = f"The download folder {path} can't be used ({err}): the default one is used."
+                if initial:
+                    logging.warning(message)
+                else:
+                    messagebox.showerror("Download folder", message)
+                folder = ""
+            else:
+                folder = str(path)
+        config.DOWNLOAD_FOLDER = folder or self._default_download_folder()
+        return bool(folder)
+
+    @staticmethod
+    def _default_download_folder() -> str:
+        """The "Downloads" folder of the program (next to URLs.txt)."""
+        return "Downloads"
+
+    def _choose_download_folder(self) -> None:
+        """Settings → Download folder…"""
+        if self._guard_running():
+            return
+        from tkinter import filedialog  # pylint: disable=import-outside-toplevel
+        current = Path(config.DOWNLOAD_FOLDER).resolve()
+        chosen = filedialog.askdirectory(parent=self, title="Folder of the downloaded galleries",
+                                         initialdir=str(current if current.exists() else Path.cwd()),
+                                         mustexist=False)
+        if not chosen:
+            return
+        if self._apply_download_folder(chosen):
+            self._settings["download_folder"] = config.DOWNLOAD_FOLDER
+            self._save_settings()
+            self._set_menu_options_state("normal")
+            self._append_log(_ts(), "Settings",
+                             f"Download folder: {config.DOWNLOAD_FOLDER} (E-Hentai/ and nhentai/ are made inside it). "
+                             "Albums in progress stay in temp/ until they are complete.")
+
+    def _reset_download_folder(self) -> None:
+        """Settings → Use the default download folder."""
+        if self._guard_running():
+            return
+        self._settings.pop("download_folder", None)
+        self._apply_download_folder("")
+        self._save_settings()
+        self._set_menu_options_state("normal")
+        self._append_log(_ts(), "Settings", f"Download folder: {Path(config.DOWNLOAD_FOLDER).resolve()} (default).")
+
+    # ------------------------------------------------------------------ favorite tags
+
+    def _open_favorite_tags(self) -> None:
+        """Settings → Favorite tags…"""
+        if self._guard_running():
+            return
+        gui_dialogs.FavoriteTagsDialog(self, self._palette(), DIALOG_FONTS, tag_utils.get_favorites(),
+                                       bool(self._tag_folders_var.get()), self._on_favorite_tags_saved)
+
+    def _on_favorite_tags_saved(self, favorites: list[dict], folders: bool) -> None:
+        """The favorite tags window was saved."""
+        tag_utils.set_favorites(favorites)
+        changed_folders = folders != bool(self._tag_folders_var.get())
+        self._tag_folders_var.set(folders)
+        tag_utils.set_folders_enabled(folders)
+        self._save_settings()
+        names = ", ".join(tag_utils.badge_text(fav["label"]) for fav in favorites) or "none"
+        self._append_log(_ts(), "Settings", f"Favorite tags: {names}.")
+        if changed_folders:
+            self._on_tag_folders_changed(save=False)
+        self._redecorate_batch()
+
+    def _on_tag_folders_changed(self, save: bool = True) -> None:
+        """Settings → Sort downloads into folders by favorite tag."""
+        tag_utils.set_folders_enabled(bool(self._tag_folders_var.get()))
+        if save:
+            self._save_settings()
+        if self._tag_folders_var.get():
+            text = ("Folders by favorite tag ON: a gallery with a favorite tag goes into "
+                    "<site>/<label>/ (for example E-Hentai/Netorare/).")
+            if not tag_utils.get_favorites():
+                text += " No favorite tag is set yet: add them in Settings → Favorite tags…"
+        else:
+            text = "Folders by favorite tag OFF: every gallery goes into E-Hentai/ or nhentai/."
+        self._append_log(_ts(), "Settings", text)
+
     def _get_selected_format(self) -> str:
         """Internal format name of the chosen label (original / webp / jpg / jxl / png / avif)."""
         return image_formats.name_from_label(self._format_var.get())
@@ -494,6 +610,8 @@ class EHentaiGUI(  # pylint: disable=too-many-ancestors,too-many-instance-attrib
             self._verify_btn, self._dedupe_btn, self._reload_btn, self._clear_btn,
         ):
             btn.configure(state=state)
+        for btn in self._queue_buttons:  # ▲ ▼ ✖ work whenever the list can be edited
+            btn.configure(state="normal" if editor_editable else state)
         # Verify / retry follow lines by number: the list must not change while they run
         self._batch_editor.configure(state="normal" if editor_editable else state)
         self._format_cb.configure(state="readonly" if state == "normal" else "disabled")
@@ -508,8 +626,8 @@ class EHentaiGUI(  # pylint: disable=too-many-ancestors,too-many-instance-attrib
 
     def _open_downloads_folder(self) -> None:
         """Open the Downloads folder in the system file manager."""
-        folder = Path(DOWNLOAD_FOLDER)
-        folder.mkdir(exist_ok=True)
+        folder = Path(config.DOWNLOAD_FOLDER)
+        folder.mkdir(parents=True, exist_ok=True)
         try:
             open_with_system(folder.resolve())
         except Exception as err:
@@ -576,6 +694,7 @@ class EHentaiGUI(  # pylint: disable=too-many-ancestors,too-many-instance-attrib
         tasks = self._editor_entries()
         if not self._confirm_invalid_links(tasks, "Start the download"):
             return
+        self._sort_batch_list()  # by site, then size: the two lanes go down the list in order
 
         fmt = self._get_selected_format()
         self._begin_download(editor_editable=True)
@@ -588,7 +707,7 @@ class EHentaiGUI(  # pylint: disable=too-many-ancestors,too-many-instance-attrib
         self._batch_progress = BatchProgress(self._q, lambda: self._batch_total)
         self._active_tasks = {}
         with self._batch_lock:
-            self._batch_queues = {lane: queue.Queue() for lane in throttle.SITES}
+            self._batch_queues = {lane: deque() for lane in throttle.SITES}
             self._lane_running = {lane: False for lane in throttle.SITES}
             self._batch_result = {"started": 0, "success": True, "failed": {}}
             self._verify_queue = queue.Queue()

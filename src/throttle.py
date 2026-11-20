@@ -22,6 +22,12 @@ Two things live here:
 
 * User pause (GUI "Pause" button): no new request starts until "Resume"; images already
   being received finish normally.
+
+* Internet connection lost: when a request fails with a connection error and no site can
+  be reached at all, every download waits (like the user pause) until the connection is
+  back, checked every NETWORK_CHECK_INTERVAL seconds; the request is then sent again
+  instead of being counted as failed. The gallery in progress is checked once more when
+  it ends (see AlbumDownloader.download_album).
 """
 
 from __future__ import annotations
@@ -29,6 +35,7 @@ from __future__ import annotations
 import logging
 import random
 import re
+import socket
 import threading
 import time
 from typing import Callable
@@ -63,6 +70,13 @@ _ban_until: dict[str, float] = {site: 0.0 for site in SITES}  # end of the curre
 _ban_listeners: list[Callable[[float], None]] = []
 _running = threading.Event()  # cleared = paused by the user
 _running.set()
+_online = threading.Event()   # cleared = internet connection lost
+_online.set()
+_outages = 0                  # connection losses since the start (galleries compare it)
+_network_listeners: list[Callable[[bool], None]] = []
+NETWORK_CHECK_INTERVAL = 10   # seconds between checks while the connection is down
+# Hosts tried to tell "no internet" from "one site is down" (any answer = online)
+_PROBE_HOSTS = (("1.1.1.1", 443), ("8.8.8.8", 53), ("e-hentai.org", 443), ("nhentai.net", 443))
 
 _BAN_RE = re.compile(r"ban expires in(.{0,120})", re.IGNORECASE | re.DOTALL)
 _UNIT_RE = re.compile(r"(\d+)\s*(day|hour|minute|second)", re.IGNORECASE)
@@ -128,8 +142,81 @@ def is_paused() -> bool:
 
 
 def wait_while_paused() -> None:
-    """Block the calling thread while the downloads are paused."""
+    """Block the calling thread while the downloads are paused or the internet connection is down."""
     _running.wait()
+    _online.wait()
+
+
+# ---------------------------------------------------------------- internet connection
+
+def internet_available(timeout: float = 3.0) -> bool:
+    """True when at least one well-known host answers (a single site being down is not 'offline')."""
+    for host, port in _PROBE_HOSTS:
+        try:
+            with socket.create_connection((host, port), timeout=timeout):
+                return True
+        except OSError:
+            continue
+    return False
+
+
+def is_online() -> bool:
+    """False while the program is waiting for the internet connection to come back."""
+    return _online.is_set()
+
+
+def network_outages() -> int:
+    """How many times the connection was lost since the start."""
+    return _outages
+
+
+def _notify_network(online: bool) -> None:
+    with _lock:
+        listeners = list(_network_listeners)
+    for callback in listeners:
+        try:
+            callback(online)
+        except Exception:
+            pass
+
+
+def _watch_network() -> None:
+    """Thread: check the connection every NETWORK_CHECK_INTERVAL seconds until it is back."""
+    while not internet_available():
+        time.sleep(NETWORK_CHECK_INTERVAL)
+    _online.set()
+    logging.info("Internet connection is back: downloads resume.")
+    _notify_network(True)
+
+
+def wait_if_offline(error: Exception | None = None) -> bool:
+    """After a connection error: if the internet connection is down, wait until it is back.
+
+    Returns True when there was an outage (the caller should send the request again without
+    counting it as a failed attempt), False when the connection works (a real error).
+    """
+    global _outages  # pylint: disable=global-statement
+    if _online.is_set():
+        if internet_available():
+            return False
+        with _lock:
+            start_watch = _online.is_set()
+            if start_watch:
+                _online.clear()
+                _outages += 1
+        if start_watch:
+            logging.warning("Internet connection lost%s: downloads wait until it is back (checked every "
+                            f"{NETWORK_CHECK_INTERVAL} s).", f" ({error})" if error else "")
+            _notify_network(False)
+            threading.Thread(target=_watch_network, name="network-watch", daemon=True).start()
+    _online.wait()
+    return True
+
+
+def add_network_listener(callback: Callable[[bool], None]) -> None:
+    """Call callback(False) when the connection is lost and callback(True) when it is back."""
+    with _lock:
+        _network_listeners.append(callback)
 
 
 # ---------------------------------------------------------------- ban

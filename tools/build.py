@@ -70,9 +70,16 @@ def run_pyinstaller(system: str) -> None:
         "--add-data", f"{ROOT / 'LICENSE'}{sep}.",
         *[arg for name in ("icon.png", "icon_16.png", "icon_32.png", "icon_small.png", "logo_small.png")
           for arg in ("--add-data", f"{ROOT / 'assets' / name}{sep}assets")],
+        "--add-data", f"{ROOT / 'assets' / 'sites'}{sep}assets/sites",  # site logos of the lists
         "--collect-submodules", "src",
         "--hidden-import", "pillow_jxl",  # JPEG XL plug-in, imported only when that format is chosen
     ]
+    # pystray picks its tray backend at run time: bundle the ones of this system
+    if system == "windows":
+        args += ["--hidden-import", "pystray._win32"]
+    elif system == "linux":
+        args += [arg for backend in ("_appindicator", "_gtk", "_xorg")
+                 for arg in ("--hidden-import", f"pystray.{backend}")]
     if system == "macos":
         args += ["--osx-bundle-identifier", "io.github.lainx84.ehentaidownloader"]
     else:

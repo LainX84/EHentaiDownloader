@@ -43,6 +43,8 @@ LINE_FAIL_BG = ui_theme.LIGHT["LINE_FAIL_BG"]
 LINE_FAIL_FG = ui_theme.LIGHT["LINE_FAIL_FG"]
 OK_BANNER = ui_theme.LIGHT["OK_BANNER"]
 WARN_BANNER = ui_theme.LIGHT["WARN_BANNER"]
+BADGE_BG = ui_theme.LIGHT["BADGE_BG"]
+BADGE_FG = ui_theme.LIGHT["BADGE_FG"]
 
 _UI_FAMILY, _MONO_FAMILY = ui_theme.font_families()
 FONT_UI    = (_UI_FAMILY,   10)
@@ -55,7 +57,7 @@ FONT_BTN   = (_UI_FAMILY,   10, "bold")
 DIALOG_FONTS = {"ui": FONT_UI, "small": FONT_SMALL, "mono": FONT_MONO, "title": FONT_TITLE, "head": FONT_HEAD}
 
 PAD = 12
-TAB_WIDTH = 18  # characters: the three tabs are always the same size
+TAB_WIDTH = 16  # characters: the four tabs are always the same size
 
 # "When done" choices (status bar). Never remembered between runs: a forgotten
 # "Shut down PC" must not switch the computer off at the next, unrelated download.

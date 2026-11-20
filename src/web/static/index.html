@@ -29,6 +29,9 @@
           <label><input type="checkbox" data-setting="cbz_archive"> CBZ archive</label>
           <label><input type="checkbox" data-setting="comic_info"> ComicInfo.xml in CBZ</label>
           <hr>
+          <button data-action="favorites">Favorite tags…</button>
+          <label><input type="checkbox" data-setting="tag_folders"> Sort downloads into folders by favorite tag</label>
+          <hr>
           <div class="menu-head">Speed</div>
           <div id="speed-options"></div>
           <hr>
@@ -68,6 +71,7 @@
       <button class="tab active" data-tab="single">🔗 Single Download</button>
       <button class="tab" data-tab="batch">📋 Batch Download</button>
       <button class="tab" data-tab="retry">🔄 Retry Failed</button>
+      <button class="tab" data-tab="stats">📊 Statistics</button>
     </div>
   </div>
 
@@ -87,7 +91,7 @@
   <section class="card tab-page hidden" id="tab-batch">
     <h2>Batch Download (URLs.txt)</h2>
     <p class="sub">One URL per line, saved automatically. Paste any text with links: only gallery links are kept.<br>
-      You can keep adding links while the batch runs; downloaded lines disappear after a while.</p>
+      You can keep adding links while the batch runs; ▲ ▼ or drag a line to change the order, ✕ to remove it (if it has not started yet).</p>
     <div class="add-row">
       <textarea id="add-text" rows="2" spellcheck="false" placeholder="Paste here any text with gallery links (a page, a message…) and press Add, or Ctrl+V on the list."></textarea>
       <button class="btn accent" id="add-btn">＋ Add</button>
@@ -132,6 +136,24 @@
     </div>
   </section>
 
+  <section class="card tab-page hidden" id="tab-stats">
+    <div class="stats-head">
+      <h2>Statistics</h2>
+      <span id="stats-now" class="accent-text"></span>
+      <button class="btn ghost" id="stats-reset">🗑 Reset</button>
+    </div>
+    <div class="stats-grid">
+      <table class="stats-table">
+        <thead><tr><th></th><th id="stats-total-title">Since the first start</th><th id="stats-session-title">This session</th></tr></thead>
+        <tbody id="stats-body"></tbody>
+      </table>
+      <div class="stats-tags">
+        <h3>Most downloaded tags</h3>
+        <div id="stats-tags" class="list tags-list"></div>
+      </div>
+    </div>
+  </section>
+
   <section class="progress">
     <div class="bar-row"><span class="bar-label" id="bar1-label">Total:</span>
       <div class="bar"><div class="fill total" id="bar1"></div></div><span class="bar-text" id="bar1-text">0%</span></div>
@@ -154,6 +176,7 @@
   <span id="status" class="status-text">Ready.</span>
   <span id="ban" class="ban hidden"><span id="ban-text"></span>
     <button class="btn warn small-btn" id="ban-resume" title="Skip the wait, e.g. after switching IP">▶ Resume now</button></span>
+  <span id="speed-now" class="small accent-text"></span>
   <span id="session" class="muted small"></span>
   <span id="speed-label" class="small"></span>
 </footer>

@@ -34,5 +34,7 @@ THIRD_PARTY_TEXT = """Third-party software used by this program (each under its 
   • Pillow – MIT-CMU (HPND), with libwebp (BSD), libavif (BSD), libjpeg-turbo (BSD-style) and libpng (libpng License)
   • pillow-jxl-plugin – GPL-3.0, with libjxl (BSD)
   • Rich – MIT
+  • pystray (desktop: system tray icon) – LGPL-3.0
+  • tkinterdnd2 (desktop: drag and drop, optional) – MIT, with tkdnd (BSD)
   • ImageMagick (optional, external program) – ImageMagick License
 """

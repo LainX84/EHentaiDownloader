@@ -56,6 +56,8 @@ LIGHT: dict[str, str] = {
     "LINE_FAIL_FG": "#78281F",
     "OK_BANNER": "#1A6B3A",
     "WARN_BANNER": "#B8580A",
+    "BADGE_BG": "#C2185B",    # favorite tag in the lists (magenta)
+    "BADGE_FG": "#FFFFFD",
 }
 
 DARK: dict[str, str] = {
@@ -87,6 +89,8 @@ DARK: dict[str, str] = {
     "LINE_FAIL_FG": "#F5B7B1",
     "OK_BANNER": "#57D98F",
     "WARN_BANNER": "#F5A65B",
+    "BADGE_BG": "#E0457B",
+    "BADGE_FG": "#FFFFFD",
 }
 
 PALETTES = {THEME_LIGHT: LIGHT, THEME_DARK: DARK}

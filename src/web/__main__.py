@@ -26,6 +26,8 @@ def _setup_folders() -> tuple[Path, Path]:
     config.FAILED_URLS_FILE = str(config_dir / "failed_downloads.txt")
     config.SETTINGS_FILE = str(config_dir / "settings.json")
     config.SESSION_LOG = str(config_dir / "session.log")
+    config.STATS_FILE = str(config_dir / "stats.json")
+    config.TAGS_FILE = str(config_dir / "tags.json")
     return data_dir, config_dir
 
 

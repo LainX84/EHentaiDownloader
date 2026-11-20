@@ -13,7 +13,7 @@ downloads, same files, same settings.
   and [GitHub Packages `ghcr.io/lainx84/ehentaidownloader`](https://github.com/LainX84/EHentaiDownloader/pkgs/container/ehentaidownloader)
   (same image on both)
 - **Architectures:** `linux/amd64` and `linux/arm64`
-- **Tags:** `latest` and the version (e.g. `2.0.4`); the image version is the same as the desktop program
+- **Tags:** `latest` and the version (e.g. `2.1.0`); the image version is the same as the desktop program
 
 > ⚠️ **No login.** The page is meant for the **home network only**: publish the port on the
 > LAN address of the server, never on the internet (no port forwarding, no public reverse proxy).
@@ -64,8 +64,8 @@ The folders given to `/data` and `/config` must be writable by the user of `user
 
 | In the container | What is inside |
 |---|---|
-| `/data` | `E-Hentai/` and `nhentai/` (completed albums, folders or `.cbz`), `temp/` (albums still downloading), `cookies.json` |
-| `/config` | `settings.json`, `URLs.txt` (batch list), `failed_downloads.txt` (retry queue), `session.log` (+ rotated copies) |
+| `/data` | `E-Hentai/` and `nhentai/` (completed albums, folders or `.cbz`; with *folders by favorite tag* also `E-Hentai/<tag>/…`), `temp/` (albums still downloading), `cookies.json` |
+| `/config` | `settings.json`, `URLs.txt` (batch list), `failed_downloads.txt` (retry queue), `stats.json` (statistics), `tags.json` (tags met in the galleries), `session.log` (+ rotated copies), optional `logos/` (your own site logos: `ehentai.png`, `exhentai.png`, `nhentai.png`) |
 
 Albums are downloaded into `temp/` and moved to `E-Hentai/` or `nhentai/` only when complete,
 so the site folders never hold half albums. A stopped download is resumed from where it was,
@@ -86,16 +86,25 @@ skipping the pages already on disk.
 
 Everything of the desktop window, from any browser of the house:
 
-- **Single Download**, **Batch Download** (`URLs.txt`) and **Retry Failed** (`failed_downloads.txt`) tabs.
+- **Single Download**, **Batch Download** (`URLs.txt`), **Retry Failed** (`failed_downloads.txt`) and **Statistics** tabs.
+- **Clear lists, in columns**: `✅ | [site logo] | [ NETORARE ] | 123 | Gallery title` (favorite tag in
+  its own colour, number of pages); the link is hidden but kept.
+  Lines not started yet can be moved with ▲ ▼ or by dragging them, and removed with ✕, also
+  while the batch runs: each site downloads in the order of the list.
+- **Statistics**: galleries, images, size, time and speed (average, peak, now) since the first
+  start and for this session, per site (E-Hentai, ExHentai, nhentai), and the most downloaded tags.
 - **Add links**: paste any text (a web page, a chat message…) in the box or press Ctrl+V on the
   list: only gallery links are kept, galleries already listed are skipped. Links can be added
   while the batch runs.
 - **E-Hentai / ExHentai and nhentai download side by side**, one gallery per site at a time,
   each with its own progress bar, pace and ban pause.
-- **Verify Links** (title, images, source site, then optional "fewer images first" order),
+- **Verify Links** (title, images, source site), then the list is sorted by site and size (also at
+  Start Batch: E-Hentai / ExHentai first, then nhentai, fewer images first in each group),
   **Duplicates**, **Pause / Resume**, **Resume now** after an IP ban.
 - **Settings**: image format (Native / WEBP – default – / JPEG / JPEG XL / PNG / AVIF, all open and royalty-free), Auto Rename `01…N`, CBZ archive,
-  ComicInfo.xml, speed (1x–5x), light / dark / automatic theme.
+  ComicInfo.xml, **favorite tags** (tick them in the list of the tags met in your galleries, each with its
+  own label, colour and priority; shown in the lists) and **folders by favorite tag**
+  (`E-Hentai/<tag>/…`, `nhentai/<tag>/…`), speed (1x–5x), light / dark / automatic theme.
 - **Status bar**: images downloaded **today** (the counter starts again every day at 06:00 and
   survives restarts), current speed, ban countdown.
 - **Log** with colours; *File → Open log file* shows `session.log`.
@@ -104,8 +113,9 @@ Everything of the desktop window, from any browser of the house:
 The downloads run **inside the container**: they go on with the browser closed, and every open
 page shows the same lists and progress.
 
-Not in the web version (desktop only): drag and drop and the clipboard watcher (paste the links
-in the page instead), and *When done* (close / shut down: the server keeps running).
+Not in the web version (desktop only): drag and drop of links and the clipboard watcher (paste the
+links in the page instead), *When done* (close / shut down: the server keeps running) and the
+download folder setting (the albums go to the folder mounted on `/data`).
 
 ## Account cookies (ExHentai)
 

@@ -77,27 +77,25 @@ class WorkersMixin:  # pylint: disable=too-few-public-methods,no-member
     def _next_batch_task(self, lane: str) -> tuple[dict | None, bool]:
         """Worker thread: (next task of lane, False), or (None, last) when the lane is empty.
 
-        Before giving up it asks the GUI to look once more for lines added in the meantime.
+        Before each gallery it asks the GUI to look at the list once more: lines added in the
+        meantime join the batch, moved lines change the order and removed lines are dropped.
         The lane is stopped under the lock, so a line added later is never lost: the GUI
         starts the lane again. last is True when no other lane is running: the batch is over.
         """
         lane_queue = self._batch_queues[lane]
-        try:
-            return lane_queue.get_nowait(), False
-        except queue.Empty:
-            pass
         scanned = threading.Event()
         self._q.put(("BATCH_SCAN", scanned))
         scanned.wait(timeout=5)
         with self._batch_lock:
-            try:
-                return lane_queue.get_nowait(), False
-            except queue.Empty:
-                self._lane_running[lane] = False
-                last = not any(self._lane_running.values())
-                if last:
-                    self._batch_accepting = False
-                return None, last
+            while lane_queue:
+                task = lane_queue.popleft()
+                if self._task_state.get(task["id"]) != "cancelled":
+                    return task, False
+            self._lane_running[lane] = False
+            last = not any(self._lane_running.values())
+            if last:
+                self._batch_accepting = False
+            return None, last
 
     def _run_batch_lane(self, lane: str) -> None:
         """Worker thread: download the galleries of one site, one after another."""

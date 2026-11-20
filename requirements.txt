@@ -4,3 +4,4 @@ rich==14.1.0
 Pillow>=11.3.0  # 11.3+: AVIF support built in
 pillow-jxl-plugin==1.3.8  # JPEG XL support for Pillow
 tkinterdnd2==0.7.0  # optional: drag and drop of links onto the window
+pystray==0.19.5  # optional: minimize to the system tray (Windows / Linux)

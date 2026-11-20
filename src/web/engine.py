@@ -25,7 +25,7 @@ from collections import deque
 from pathlib import Path
 from typing import Callable
 
-from src import config, image_formats, throttle
+from src import config, image_formats, stats, tags as tag_utils, throttle
 from src.downloader.cbz_archive import set_comic_info
 from src.file_utils import append_session_banner, append_session_log, read_file, write_file
 from src.gui.live_manager import GUILiveManager, QueueLogHandler
@@ -38,7 +38,7 @@ LANE_LABELS = {throttle.SITE_EH: "E-Hentai/ExHentai", throttle.SITE_NH: "nhentai
 LANE_IDLE = "Idle"
 THEMES = ("auto", "light", "dark")
 
-BOOL_SETTINGS = ("auto_rename", "cbz_archive", "comic_info", "check_updates")
+BOOL_SETTINGS = ("auto_rename", "cbz_archive", "comic_info", "check_updates", "tag_folders")
 
 COUNTER_RESET_HOUR = 6   # the "today" image counter starts again every day at 06:00
 COUNTER_SAVE_EVERY = 30  # seconds between saves of the counter while images are downloading
@@ -75,6 +75,26 @@ def log_tag(event: str, details: str) -> str:
     if any(w in low for w in ("success", "complete", "downloaded", "renamed", "created", "ok")):
         return "ok"
     return "info"
+
+
+def line_view(text: str) -> dict:
+    """What the page shows of a list line, in columns: status, site, favorite tag, images, title.
+
+    {"status": "GOOD"/"BAD"/"", "site": "EHENTAI"/..., "badge": str, "color": "#RRGGBB"/"",
+    "ink": text colour on it, "images": int, "title": str}. The link stays hidden. A line the
+    program knows nothing about yet (a bare link) has status "" and its text as title.
+    """
+    from src.cli.downloader import parse_table_line, site_name  # pylint: disable=import-outside-toplevel
+    columns = parse_table_line(text)
+    if columns is None:
+        stripped = text.strip()
+        is_link = bool(stripped) and not stripped.startswith("#")
+        return {"status": "", "site": site_name(stripped) if is_link and "://" in stripped else "",
+                "badge": "", "color": "", "ink": "", "images": 0, "title": stripped}
+    title = columns["title"] or (f"{columns['url']} — {columns['problem']}" if columns["problem"] else columns["url"])
+    color = tag_utils.badge_color(columns["badge"]) if columns["badge"] else ""
+    return {"status": columns["status"], "site": columns["site"], "badge": columns["badge"], "color": color,
+            "ink": tag_utils.text_color(color) if color else "", "images": columns["images"], "title": title}
 
 
 class BatchProgress:
@@ -139,6 +159,9 @@ class Engine:
         except (TypeError, ValueError):
             throttle.set_speed(config.DEFAULT_SPEED)
         set_comic_info(bool(self.settings.get("comic_info", config.CBZ_COMIC_INFO)))
+        tag_utils.set_favorites(self.settings.get("favorite_tags") or [])
+        tag_utils.set_folders_enabled(bool(self.settings.get("tag_folders", False)))
+        stats.load()
 
         # Running task: None, "single", "batch", "verify", "retry"
         self.mode: str | None = None
@@ -171,6 +194,10 @@ class Engine:
         self._load_urls_txt()
         self.reload_retry_list()
         throttle.add_ban_listener(self._on_ban)
+        throttle.add_network_listener(lambda online: self._set_status(
+            "▶ Internet connection back: downloads resumed." if online else
+            f"📡 Internet connection lost: downloads wait until it is back (checked every "
+            f"{throttle.NETWORK_CHECK_INTERVAL} s)."))
         threading.Thread(target=self._dispatch, name="dispatcher", daemon=True).start()
         append_session_banner("WEB APPLICATION START")
         self.log("Ready", f"EHentai Downloader {config.APP_VERSION} (web). Data folder: {self.data_dir}")
@@ -211,6 +238,9 @@ class Engine:
             "cbz_archive": bool(self.settings.get("cbz_archive", config.CREATE_CBZ)),
             "comic_info": bool(self.settings.get("comic_info", config.CBZ_COMIC_INFO)),
             "check_updates": bool(self.settings.get("check_updates", True)),
+            "tag_folders": bool(self.settings.get("tag_folders", False)),
+            "favorite_tags": tag_utils.get_favorites(),
+            "favorite_tags_text": tag_utils.favorites_text(tag_utils.get_favorites()),
             "speed": throttle.get_speed(),
             "theme": theme if theme in THEMES else "auto",
             # formats whose notice window is snoozed ("Don't show this again for 30 days")
@@ -232,7 +262,22 @@ class Engine:
                 self.settings["theme"] = changes["theme"]
             for key in BOOL_SETTINGS:
                 if key in changes:
+                    if key == "tag_folders" and self.mode:
+                        raise EngineError("A download is in progress: change the folders when it is over.")
                     self.settings[key] = bool(changes[key])
+            if "favorite_tags" in changes:
+                if self.mode:
+                    raise EngineError("A download is in progress: change the favorite tags when it is over.")
+                favorites = tag_utils.clean_favorites(changes["favorite_tags"])
+                self.settings["favorite_tags"] = favorites
+                tag_utils.set_favorites(favorites)
+            if "favorite_tags_text" in changes:
+                if self.mode:
+                    raise EngineError("A download is in progress: change the favorite tags when it is over.")
+                favorites = tag_utils.parse_favorites(str(changes["favorite_tags_text"] or ""))
+                self.settings["favorite_tags"] = favorites
+                tag_utils.set_favorites(favorites)
+            tag_utils.set_folders_enabled(bool(self.settings.get("tag_folders", False)))
             if "speed" in changes:
                 level = int(changes["speed"])
                 if level not in throttle.SPEED_LEVELS:
@@ -255,6 +300,15 @@ class Engine:
         if new["cbz_archive"] != current["cbz_archive"]:
             self.log("Settings", "CBZ archive ON: each completed album is saved as a .cbz file."
                      if new["cbz_archive"] else "CBZ archive OFF: albums are saved as folders of images.")
+        if new["favorite_tags"] != current["favorite_tags"]:
+            names = ", ".join(tag_utils.badge_text(fav["label"]) for fav in new["favorite_tags"]) or "none"
+            self.log("Settings", f"Favorite tags: {names}.")
+            self._call(self._refresh_badges)
+        if new["tag_folders"] != current["tag_folders"]:
+            self.log("Settings", "Folders by favorite tag ON: a gallery with a favorite tag goes into "
+                                 "<site>/<label>/ (for example E-Hentai/Netorare/)."
+                     if new["tag_folders"] else
+                     "Folders by favorite tag OFF: every gallery goes into E-Hentai/ or nhentai/.")
         if new["comic_info"] != current["comic_info"]:
             set_comic_info(new["comic_info"])
             self.log("Settings", "ComicInfo.xml ON: new CBZ archives include title, tags and source link."
@@ -439,7 +493,8 @@ class Engine:
         if not path.exists():
             write_file(config.URLS_FILE)
         with self._lock:
-            self._lines = [self._new_line(line.rstrip("\r\n")) for line in read_file(config.URLS_FILE)]
+            from src.cli.downloader import normalize_line  # pylint: disable=import-outside-toplevel
+            self._lines = [self._new_line(normalize_line(line.rstrip("\r\n"))) for line in read_file(config.URLS_FILE)]
             while self._lines and not self._lines[-1]["text"].strip():
                 self._lines.pop()
             self._touch_lines()
@@ -536,6 +591,39 @@ class Engine:
             self._touch_lines()
             self._save_urls_txt()
 
+    def move_line(self, line_id: int, to_index: int) -> None:
+        """▲ ▼ / drag and drop: put a line at another place of the list (not one already started)."""
+        with self._lock:
+            self._guard_list_editable()
+            line = self._line_by_id(line_id)
+            if line is None:
+                return
+            if self._batch and line["task"]:
+                state = self._batch["task_state"].get(line["task"])
+                if state in ("active", "done"):
+                    raise EngineError("This gallery has already started: only lines still waiting can be moved.")
+            to_index = max(0, min(int(to_index), len(self._lines) - 1))
+            if self._lines.index(line) == to_index:
+                return
+            self._lines.remove(line)
+            self._lines.insert(to_index, line)
+            self._touch_lines()
+            self._save_urls_txt()
+
+    def _refresh_badges(self) -> None:
+        """Dispatcher: favorite tags changed: rewrite every list line (tag, column width)."""
+        from src.cli.downloader import normalize_line  # pylint: disable=import-outside-toplevel
+        with self._lock:
+            changed = False
+            for line in self._lines:
+                text = normalize_line(line["text"])
+                if text != line["text"]:
+                    line["text"], changed = text, True
+            if changed:
+                self._touch_lines()
+                self._save_urls_txt()
+        self.reload_retry_list()
+
     def clear_list(self) -> None:
         """'Clear All' (after the confirmation in the page)."""
         with self._lock:
@@ -593,23 +681,29 @@ class Engine:
         return len(pairs)
 
     def sort_by_size(self) -> bool:
-        """'Fewer images first' offered after Verify Links."""
-        from src.cli.downloader import gallery_status, parse_url_line, sort_lines_by_size  # pylint: disable=import-outside-toplevel
+        """Sort the list by site (E-Hentai / ExHentai, then nhentai), then size (fewer images first)."""
         with self._lock:
             self._guard_list_editable(running_ok=False)
+            return self._sort_lines()
+
+    def _sort_lines(self) -> bool:
+        """sort_by_size() without the check (after Verify Links, at Start Batch). Lock taken here."""
+        from src.cli.downloader import gallery_status, parse_url_line, sort_lines_by_size  # pylint: disable=import-outside-toplevel
+        with self._lock:
             self.sort_offer = False
             self._touch_lines()
             sorted_lines = sort_lines_by_size([line["text"] for line in self._lines])
             if sorted_lines is None:
                 return False
+            states = {line["text"]: line["state"] for line in self._lines}
             self._lines = [self._new_line(text) for text in sorted_lines]
             for line in self._lines:  # keep the verify colours
                 url, _ = parse_url_line(line["text"])
                 status = gallery_status(url) if url else ""
-                if status:
-                    line["state"] = "done" if status == "GOOD" else "fail"
+                line["state"] = ("done" if status == "GOOD" else "fail") if status else states.get(line["text"], "")
             self._save_urls_txt()
-        self.log("Download order", "List sorted: galleries with fewer images first.")
+        self.log("Download order", "List sorted: E-Hentai / ExHentai first, then nhentai; in each, galleries "
+                                   "with fewer images first.")
         return True
 
     def dismiss_sort(self) -> None:
@@ -798,8 +892,7 @@ class Engine:
             self._call(self._on_verify_done, ok_count, bad_count, domains)
 
     def _on_verify_done(self, ok_count: int, bad_count: int, domains: dict) -> None:
-        """Dispatcher: save the annotated list, print the summary, offer the sort."""
-        from src.cli.downloader import sort_lines_by_size  # pylint: disable=import-outside-toplevel
+        """Dispatcher: save the annotated list, print the summary, sort the list by site and size."""
         with self._lock:
             self.mode = None
             self._save_urls_txt()
@@ -808,13 +901,14 @@ class Engine:
             self._estimate_cache = (-1, "")
             est = self._estimate()
             self.status = ("✔ " if not bad_count else "⚠ ") + "Verify: " + summary
-            self.sort_offer = sort_lines_by_size([line["text"] for line in self._lines]) is not None
+            self.sort_offer = False
             self._touch_lines()
             timer = threading.Timer(config.DONE_LINE_REMOVE_DELAY, self._call,
                                     args=(self._reset_bars, self._run_seq))
             timer.daemon = True
             timer.start()
         self._append_log(ts(), "Verify completed", summary + (f". {est}" if est else ""))
+        self._sort_lines()
 
     def start_batch(self, remove_duplicates: bool = False) -> None:
         """'Start Batch': download every link of the list; links added later join the batch."""
@@ -826,6 +920,8 @@ class Engine:
                 self.remove_duplicates()
             if not self._entries():
                 raise EngineError("URLs.txt is empty. Add at least one URL before starting.")
+            self._sort_lines()  # by site, then size: the two lanes go down the list in order
+            self._clear_marks()
             fmt, rename, cbz = self._options()
             self._begin("batch", "Batch Total:")
             self._batch = {
@@ -904,12 +1000,27 @@ class Engine:
         return line["id"] if line else None
 
     def _next_batch_task(self, lane: str) -> tuple[dict | None, bool]:
-        """(next task of lane, False), or (None, last) when the lane is empty."""
+        """(next task of lane, False), or (None, last) when the lane is empty.
+
+        The next task is the one of this site that comes first in the list (lines can be
+        moved while the batch runs); tasks of removed lines are dropped.
+        """
         with self._lock:
             batch = self._batch
             lane_queue = batch["queues"][lane]
             if lane_queue:
-                return lane_queue.popleft(), False
+                position = {line["task"]: idx for idx, line in enumerate(self._lines) if line["task"]}
+                waiting = [task for task in lane_queue if task["id"] not in batch["cancelled"]
+                           and task["id"] in position]
+                gone = [task for task in lane_queue if task not in waiting]
+                lane_queue.clear()
+                lane_queue.extend(sorted(waiting, key=lambda task: position[task["id"]]))
+                for task in gone:  # line removed from the list
+                    batch["task_state"][task["id"]] = "done"
+                    batch["total"] = max(0, batch["total"] - 1)
+                    self.log("Removed", f"{task['name'] or task['url']}: removed from the queue, not downloaded.")
+                if lane_queue:
+                    return lane_queue.popleft(), False
             batch["lane_running"][lane] = False
             last = not any(batch["lane_running"].values())
             if last:
@@ -1364,6 +1475,24 @@ class Engine:
             text = "…(older lines cut)…\n" + text.split("\n", 1)[-1]
         return text
 
+    # ------------------------------------------------------------------ statistics
+
+    @staticmethod
+    def tag_catalog() -> dict:
+        """Favorite tags window: every tag met in the galleries, with the favorite ones first."""
+        return {"tags": tag_utils.catalog(), "seen": tag_utils.seen_count(), "badge_max": tag_utils.BADGE_MAX,
+                "colors": list(tag_utils.DEFAULT_COLORS)}
+
+    @staticmethod
+    def statistics() -> dict:
+        """Statistics tab."""
+        return stats.snapshot(top=25)
+
+    def reset_statistics(self) -> None:
+        """'Reset' of the Statistics tab."""
+        stats.reset()
+        self.log("Statistics", "Statistics reset.")
+
     # ------------------------------------------------------------------ snapshot
 
     def snapshot(self, since: int, epoch: int, lines_rev: int, retry_rev: int) -> dict:
@@ -1389,12 +1518,15 @@ class Engine:
                 "retry_rev": self._retry_rev,
                 "update": self.update_info,
             }
+            data["speed_now"] = stats.current_speed()
+            data["badge_width"] = tag_utils.badge_width()
             if lines_rev != self._lines_rev:
-                data["lines"] = [{"id": line["id"], "text": line["text"], "state": line["state"]}
-                                 for line in self._lines]
+                data["lines"] = [{"id": line["id"], "text": line["text"], "state": line["state"],
+                                  **line_view(line["text"])} for line in self._lines]
                 data["estimate"] = self._estimate()
                 data["sort_offer"] = self.sort_offer
                 data["accepting"] = bool(self._batch and self._batch["accepting"])
             if retry_rev != self._retry_rev:
-                data["retry"] = [{"text": item["text"], "state": item["state"]} for item in self._retry]
+                data["retry"] = [{"text": item["text"], "state": item["state"], **line_view(item["text"])}
+                                 for item in self._retry]
             return data

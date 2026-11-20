@@ -395,6 +395,7 @@ def fetch_page(
     bans = 0
     while True:
         transient = False
+        outage = False
         rate_limited = False
         banned = False
 
@@ -467,6 +468,10 @@ def fetch_page(
                     )
 
             except requests.RequestException as req_err:
+                # No internet at all: wait until it is back and ask again (not a failed attempt)
+                if getattr(req_err, "response", None) is None and throttle.wait_if_offline(req_err):
+                    outage = True
+                    break
                 response = req_err.response if hasattr(req_err, "response") else None
                 last_diagnosis = _build_request_error_message(
                     url=current_url,
@@ -482,6 +487,9 @@ def fetch_page(
                     logging.warning(
                         f"Request error for {current_url} ({req_err}). Trying alternate domain: {urls_to_try[attempt_idx + 1]}"
                     )
+
+        if outage:
+            continue  # same attempt again, now that the connection is back
 
         if banned:
             bans += 1

@@ -25,6 +25,7 @@ RUN pip install --no-cache-dir -r /tmp/requirements-web.txt && rm /tmp/requireme
 
 COPY LICENSE ./
 COPY assets/icon_small.png assets/icon_32.png assets/logo_small.png ./assets/
+COPY assets/sites ./assets/sites
 COPY src ./src
 
 # Default user 1000:1000 (change it with "user:" in compose); /data and /config are volumes

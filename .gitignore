@@ -197,6 +197,9 @@ cython_debug/
 # ---------------------------------------------------------------
 cookies.json
 settings.json
+stats.json
+tags.json
+logos/
 cookies.txt
 URLs.txt
 failed_downloads.txt

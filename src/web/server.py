@@ -57,6 +57,11 @@ class FormatNoticeBody(BaseModel):
     format: str = ""
 
 
+class MoveBody(BaseModel):
+    """New position (0 = top) of a line of the batch list."""
+    to_index: int = 0
+
+
 class DisclaimerBody(BaseModel):
     """Notice accepted; snooze hides it for DISCLAIMER_SNOOZE_DAYS days."""
     snooze: bool = False
@@ -170,6 +175,11 @@ def create_app(data_dir: Path, config_dir: Path) -> FastAPI:
         run(engine.delete_line, line_id)
         return {"ok": True}
 
+    @app.post("/api/batch/line/{line_id}/move")
+    def batch_move_line(line_id: int, body: MoveBody) -> dict:
+        run(engine.move_line, line_id, body.to_index)
+        return {"ok": True}
+
     @app.post("/api/batch/reload")
     def batch_reload() -> dict:
         run(engine.reload_urls_txt)
@@ -201,6 +211,31 @@ def create_app(data_dir: Path, config_dir: Path) -> FastAPI:
     def retry_clear() -> dict:
         run(engine.clear_retry_queue)
         return {"ok": True}
+
+    @app.get("/api/tags")
+    def tag_catalog() -> dict:
+        return engine.tag_catalog()
+
+    # statistics
+    @app.get("/api/stats")
+    def statistics() -> dict:
+        return engine.statistics()
+
+    @app.post("/api/stats/reset")
+    def statistics_reset() -> dict:
+        engine.reset_statistics()
+        return {"ok": True}
+
+    @app.get("/sitelogo/{site}")
+    def site_logo(site: str) -> FileResponse:
+        """Logo of a site: <config>/logos/<site>.png of the user if present, else the bundled one."""
+        name = {"EHENTAI": "ehentai.png", "EXHENTAI": "exhentai.png", "NHENTAI": "nhentai.png"}.get(site.upper())
+        if not name:
+            raise HTTPException(status_code=404, detail="Unknown site.")
+        for candidate in (config_dir / "logos" / name, paths.resource(f"assets/sites/{name}")):
+            if candidate.is_file():
+                return FileResponse(candidate, headers={"Cache-Control": "max-age=3600"})
+        raise HTTPException(status_code=404, detail="No logo.")
 
     # log
     @app.post("/api/log/clear")

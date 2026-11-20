@@ -21,7 +21,7 @@ import time
 from pathlib import Path
 from urllib.parse import urlparse
 
-from src import nhentai
+from src import nhentai, stats, tags as tag_utils, throttle
 from src.downloader.album_downloader import AlbumDownloader
 from src.downloader.nhentai_downloader import NHentaiAlbumDownloader
 from src.config import DEFAULT_IMAGE_FORMAT, FAILED_URLS_FILE
@@ -100,26 +100,36 @@ def _dedupe_keep_order(urls: list[str]) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# List lines:  STATUS | IMAGES | TITLE | LINK
+# List lines:  STATUS SITE | TAG | IMAGES | TITLE | LINK
 # ---------------------------------------------------------------------------
-# URLs.txt, the batch editor and failed_downloads.txt show one gallery per line as
+# URLs.txt, the batch list and failed_downloads.txt show one gallery per line, in columns:
 #
-#     GOOD |   35 | [Artist] Gallery title | https://e-hentai.org/g/1908257/7261eadc3e/
-#     BAD  |    - | (invalid link)         | https://exhentai.org/g/4077626/00cb5bea6/
+#     ✅ EHENTAI  |              |  35 | [Artist] Gallery title | https://e-hentai.org/g/1908257/7261eadc3e/
+#     ✅ NHENTAI  |   NETORARE   | 123 | [Artist] Other title | https://nhentai.net/g/694850/
+#     ❌ EXHENTAI |              |  -  | https://exhentai.org/g/4077626/00cb5bea6/ — invalid link | https://exhentai.org/g/4077626/00cb5bea6/
 #
-#   STATUS  GOOD = the gallery page was read correctly, BAD = it could not be read
-#   IMAGES  number of images in the gallery ('-' when unknown)
-#   TITLE   gallery title, or a short reason in brackets when the link is BAD
+#   STATUS  ✅ = the gallery page was read correctly, ❌ = it could not be read
+#   SITE    EHENTAI / EXHENTAI / NHENTAI (the windows show the site logo instead)
+#   TAG     the favorite tag of the gallery with the highest priority (blank if none); the
+#           column is as wide as the longest favorite label
+#   IMAGES  number of images (pages) of the gallery ('-' when unknown)
+#   TITLE   gallery title; the link followed by a short reason when the link is ❌
 #   LINK    the gallery URL (always the last column)
 #
-# The program fills these columns in itself (Verify Links / after a download). A plain
-# URL per line is also accepted, as is the older "URL  # title" form.
+# The windows hide only the LINK: it is still there for downloads, Retry and the log.
+# The program fills these columns in itself (Verify Links / after a download). A plain URL
+# per line is also accepted, as are the older "✅ SITE | [TAG |] TITLE | IMAGES | LINK",
+# "GOOD | 35 | title | URL" and "URL  # title" forms.
 
 _LEGACY_LINE_RE = re.compile(r"^(\S+)(?:\s+#\s*(.*))?$")
 _STATUS_VALUES = ("GOOD", "BAD")
+STATUS_ICONS = {"GOOD": "✅", "BAD": "❌"}
+_ICON_STATUS = {icon: status for status, icon in STATUS_ICONS.items()}
+SITE_NAMES = ("EHENTAI", "EXHENTAI", "NHENTAI")
+PROBLEM_SEP = " — "  # between the link and the reason in the TITLE column of a ❌ line
 
 # What is known about each gallery, keyed by gallery id (see _album_key):
-# {"title": str, "images": int, "status": "GOOD"/"BAD", "problem": str}
+# {"title": str, "images": int, "status": "GOOD"/"BAD", "problem": str, "tags": [...], "badge": str}
 _gallery_info: dict[str, dict] = {}
 
 
@@ -128,12 +138,24 @@ def _name_key(url: str) -> str:
     return _album_key(url) or _normalize_album_url(url)
 
 
-def remember_gallery_info(
+def site_name(url: str) -> str:
+    """EHENTAI / EXHENTAI / NHENTAI from a gallery link."""
+    host = (url or "").lower()
+    if "nhentai" in host:
+        return "NHENTAI"
+    if "exhentai" in host:
+        return "EXHENTAI"
+    return "EHENTAI"
+
+
+def remember_gallery_info(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     url: str,
     title: str | None = None,
     images: int | None = None,
     status: str | None = None,
     problem: str | None = None,
+    tags: list[str] | None = None,
+    badge: str | None = None,
 ) -> None:
     """Store what is known about a gallery (only the given, non-empty values are updated)."""
     if not url:
@@ -147,6 +169,11 @@ def remember_gallery_info(
         info["status"] = status
     if problem:
         info["problem"] = problem
+    if tags:
+        info["tags"] = list(tags)
+        tag_utils.record_gallery(_name_key(url), tags)  # listed in Settings → Favorite tags…
+    if badge is not None and "tags" not in info:
+        info["badge"] = badge
 
 
 def remember_gallery_name(url: str, name: str) -> None:
@@ -162,6 +189,22 @@ def gallery_name(url: str) -> str:
 def gallery_status(url: str) -> str:
     """Return "GOOD" / "BAD" if the link was already checked, or '' if never checked."""
     return _gallery_info.get(_name_key(url), {}).get("status", "") if url else ""
+
+
+def gallery_tags(url: str) -> list[str]:
+    """Tags of a gallery: read in this session, or remembered from an earlier one ([] if unknown)."""
+    if not url:
+        return []
+    info = _gallery_info.get(_name_key(url), {})
+    return list(info.get("tags") or tag_utils.cached_tags(_name_key(url)))
+
+
+def gallery_badge(url: str) -> str:
+    """Favorite-tag column of a gallery: the favorite with the highest priority ('' when none)."""
+    tags = gallery_tags(url)
+    if tags:
+        return tag_utils.badge_for(tags)
+    return _gallery_info.get(_name_key(url), {}).get("badge", "") if url else ""
 
 
 def gallery_key(url: str) -> str:
@@ -193,32 +236,86 @@ def short_problem(error_text: str) -> str:
     return "gallery page not readable"
 
 
+_COUNT_RE = re.compile(r"^(\d+|-)$")
+
+
+def parse_table_line(line: str) -> dict | None:
+    """Columns of a list line, or None when it is a plain URL / comment / blank line.
+
+    Returns {"status", "site", "badge", "title", "problem", "images", "url"}; status is
+    "GOOD" / "BAD", images is an int (0 = unknown), title is '' for a ❌ line.
+    """
+    text = line.strip()
+    if not text or text.startswith("#"):
+        return None
+    parts = text.split("|")
+    if len(parts) < 4:
+        return None
+    head = parts[0].split()
+    if head and head[0] in _ICON_STATUS:
+        status = _ICON_STATUS[head[0]]
+        site = head[1].upper() if len(head) > 1 and head[1].upper() in SITE_NAMES else ""
+        url = parts[-1].strip()
+        if len(parts) >= 5 and _COUNT_RE.match(parts[2].strip()):
+            # "✅ SITE | TAG | IMAGES | TITLE | LINK"
+            badge, count = parts[1].strip(), parts[2].strip()
+            title = "|".join(parts[3:-1]).strip()
+        else:
+            # 2.1.0 first form: "✅ SITE | [TAG |] TITLE | IMAGES | LINK" (tag exactly 12 wide)
+            middle = parts[1:-2]
+            badge = ""
+            if len(middle) >= 2 and len(middle[0]) == 12 and middle[0].strip() \
+                    and middle[0] == middle[0].upper():
+                badge = middle[0].strip()
+                middle = middle[1:]
+            title = "|".join(middle).strip()
+            count = parts[-2].strip()
+    # Older form: "GOOD | IMAGES | TITLE | LINK"
+    elif parts[0].strip().upper() in _STATUS_VALUES:
+        status = parts[0].strip().upper()
+        site, badge = "", ""
+        count = parts[1].strip()
+        title = "|".join(parts[2:-1]).strip()  # a title may itself contain '|'
+        url = parts[-1].strip()
+        if title.startswith("(") and title.endswith(")"):  # "(reason)" of a BAD line
+            title = PROBLEM_SEP + title[1:-1]
+    else:
+        return None
+    problem = ""
+    rest = title[len(url):] if url and title.startswith(url) else (
+        title if title.startswith(PROBLEM_SEP) else None)
+    if rest is not None:  # "<link> — <reason>": no title known
+        rest, sep = rest.strip(), PROBLEM_SEP.strip()
+        problem = rest[len(sep):].strip() if rest.startswith(sep) else ""
+        title = ""
+    return {
+        "status": status, "site": site or site_name(url), "badge": badge, "title": title,
+        "problem": problem, "images": int(count) if count.isdigit() else 0, "url": url,
+    }
+
+
 def parse_url_line(line: str) -> tuple[str, str]:
     """Split a list line into (url, title). Blank and '#' comment lines give ('', '').
 
-    Understands "STATUS | IMAGES | TITLE | LINK", "URL  # title" and a bare URL. What the
-    line says about the gallery (status, image count, title) is remembered.
+    Understands "✅ SITE | TAG | TITLE | IMAGES | LINK", the older "GOOD | IMAGES | TITLE |
+    LINK", "URL  # title" and a bare URL. What the line says about the gallery (status,
+    image count, title, favorite tag) is remembered.
     """
     text = line.strip()
     if not text or text.startswith("#"):
         return "", ""
 
-    parts = text.split("|")
-    # The first column alone identifies a table line: a bare URL never starts with GOOD/BAD.
-    # (Do not require '://' in the last column, or a BAD line holding a broken link such as
-    # "BAD | - | (invalid link) | v" would be read back as the link "BAD".)
-    if len(parts) >= 4 and parts[0].strip().upper() in _STATUS_VALUES:
-        url = parts[-1].strip()
-        status = parts[0].strip().upper()
-        count = parts[1].strip()
-        title = "|".join(parts[2:-1]).strip()  # a title may itself contain '|'
-        if title.startswith("(") and title.endswith(")"):  # "(reason)" of a BAD line
-            remember_gallery_info(url, status=status, problem=title[1:-1])
-            title = ""
+    # The first column alone identifies a table line: a bare URL never starts with ✅/❌/GOOD/BAD.
+    # (Do not require '://' in the last column, or a ❌ line holding a broken link such as
+    # "❌ EHENTAI | v — invalid link | - | v" would be read back as something else.)
+    columns = parse_table_line(text)
+    if columns:
+        url = columns["url"]
         remember_gallery_info(
-            url, title=title, status=status, images=int(count) if count.isdigit() else None,
+            url, title=columns["title"], status=columns["status"], images=columns["images"] or None,
+            problem=columns["problem"] or None, badge=columns["badge"],
         )
-        return url, title
+        return url, columns["title"]
 
     match = _LEGACY_LINE_RE.match(text)
     if not match:
@@ -228,26 +325,52 @@ def parse_url_line(line: str) -> tuple[str, str]:
     return url, title
 
 
+def line_columns(url: str) -> dict:
+    """What a list shows for a gallery: status, site, favorite tag, title (or link), images."""
+    info = _gallery_info.get(_name_key(url), {}) if url else {}
+    status = info.get("status") or ("GOOD" if info.get("title") else "")
+    title = info.get("title", "")
+    problem = info.get("problem", "")
+    if not title:
+        title = f"{url}{PROBLEM_SEP}{problem}" if problem and status == "BAD" else url
+    return {
+        "status": status, "icon": STATUS_ICONS.get(status, ""), "site": site_name(url),
+        "badge": gallery_badge(url), "title": title, "images": info.get("images", 0), "url": url,
+    }
+
+
 def format_url_line(url: str, name: str = "") -> str:
-    """Build a list line "STATUS | IMAGES | TITLE | LINK" from what is known about the gallery.
+    """Build a list line "✅ SITE | TAG | IMAGES | TITLE | LINK" from what is known about the gallery.
 
     A link the program knows nothing about yet stays a bare URL.
     """
     if name:
         remember_gallery_info(url, title=name)
     info = _gallery_info.get(_name_key(url), {})
-    if not info:
+    if not info or not (info.get("status") or info.get("title")):
         return url
-    status = info.get("status") or ("GOOD" if info.get("title") else "BAD")
-    images = str(info["images"]) if info.get("images") else "-"
-    title = info.get("title") or f"({info.get('problem') or 'not checked'})"
-    return f"{status:<4} | {images:>4} | {title} | {url}"
+    cols = line_columns(url)
+    status = cols["status"] or "BAD"
+    images = str(cols["images"]) if cols["images"] else "-"
+    pad = max(0, 5 - len(images))
+    images = " " * ((pad + 1) // 2) + images + " " * (pad // 2)  # centred (an odd space goes left)
+    width = max(tag_utils.badge_width(), len(cols["badge"]))
+    return (f"{STATUS_ICONS[status]} {cols['site']:<8} |{cols['badge']:^{width + 2}}|{images}| "
+            f"{cols['title']} | {url}")
+
+
+def normalize_line(line: str) -> str:
+    """A list line in the current format (older table forms are rewritten; others unchanged)."""
+    url, _ = parse_url_line(line)
+    if url and parse_table_line(line):
+        return format_url_line(url)
+    return line
 
 
 def estimate_list_images(lines: list[str]) -> dict:
     """Estimate how many images the link lines will download, from what the list says.
 
-    Only verified lines ("GOOD | 24 | Title | link") carry an image count. A second link
+    Only verified lines ("✅ SITE | Title | 24 | link") carry an image count. A second link
     to the same gallery is counted once (the batch skips it). Returns a dict with:
         images     – sum of the known image counts
         known      – GOOD galleries with a known image count
@@ -260,9 +383,9 @@ def estimate_list_images(lines: list[str]) -> dict:
         text = line.strip()
         if not text or text.startswith("#"):
             continue
-        parts = text.split("|")
-        if len(parts) >= 4 and parts[0].strip().upper() in _STATUS_VALUES:
-            url, status, count = parts[-1].strip(), parts[0].strip().upper(), parts[1].strip()
+        columns = parse_table_line(text)
+        if columns:
+            url, status, count = columns["url"], columns["status"], str(columns["images"])
         else:
             url, status, count = text.split()[0], "", ""
         key = gallery_key(url)
@@ -280,12 +403,14 @@ def estimate_list_images(lines: list[str]) -> dict:
 
 
 def sort_lines_by_size(lines: list[str]) -> list[str] | None:
-    """Reorder the link lines so galleries with fewer images come first.
+    """Reorder the link lines by site, then size: E-Hentai / ExHentai first, then nhentai, and in
+    each group the galleries with fewer images first.
 
-    Blank and '#' comment lines stay where they are; link lines are redistributed over
-    the remaining positions. Order: GOOD galleries by image count (smallest first), then
-    GOOD ones with unknown size, then BAD/unchecked links. Ties keep their original order.
-    Returns None when the list is already in that order.
+    Each site has its own download lane, so with this order both lanes go down the list
+    one line after another. Blank and '#' comment lines stay where they are; link lines are
+    redistributed over the remaining positions. In each site group: GOOD galleries by image
+    count (smallest first), then GOOD ones with unknown size, then BAD/unchecked links. Ties
+    keep their original order. Returns None when the list is already in that order.
     """
     slots, links = [], []
     for idx, line in enumerate(lines):
@@ -295,12 +420,13 @@ def sort_lines_by_size(lines: list[str]) -> list[str] | None:
         info = _gallery_info.get(_name_key(url), {})
         status = info.get("status") or ("GOOD" if info.get("title") else "")
         images = info.get("images") or 0
+        group = 1 if nhentai.is_nhentai_url(url) else 0
         if status == "GOOD" and images:
-            key = (0, images)
+            key = (group, 0, images)
         elif status == "GOOD":
-            key = (1, 0)
+            key = (group, 1, 0)
         else:
-            key = (2, 0)
+            key = (group, 2, 0)
         slots.append(idx)
         links.append((key, len(links), line))
     ordered = sorted(links)
@@ -347,7 +473,8 @@ def verify_gallery(url: str, session=None) -> dict:
         domain  – site that will actually be used (e-hentai.org / exhentai.org / nhentai.net)
         note    – extra info, e.g. that the other domain was used as a fallback
     """
-    result = {"url": url, "ok": False, "error": "", "title": "", "images": 0, "domain": "", "note": ""}
+    result = {"url": url, "ok": False, "error": "", "title": "", "images": 0, "domain": "", "note": "",
+              "tags": []}
     url_error = validate_gallery_url(url)
     if url_error:
         result["error"] = url_error
@@ -370,6 +497,7 @@ def verify_gallery(url: str, session=None) -> dict:
     if result["domain"] != requested_domain:
         result["note"] = f"{requested_domain} did not answer correctly, {result['domain']} will be used"
 
+    result["tags"] = tag_utils.from_ehentai_soup(soup)
     title_tag = soup.find("h1", {"id": "gn"}) or soup.find("h1", {"id": "gj"})
     result["title"] = title_tag.get_text(strip=True) if title_tag else ""
     match = re.search(r"(\d[\d,]*)\s*pages?", soup.get_text(" "), re.IGNORECASE)
@@ -384,6 +512,7 @@ def verify_gallery(url: str, session=None) -> dict:
         images=result["images"],
         status="GOOD" if result["ok"] else "BAD",
         problem=None if result["ok"] else "no gallery title found",
+        tags=result["tags"],
     )
     return result
 
@@ -403,8 +532,8 @@ def _verify_nhentai(url: str, result: dict) -> dict:
         result["error"] = str(err)
         remember_gallery_info(url, status="BAD", problem=short_problem(str(err)))
         return result
-    result.update(ok=True, title=info["title"], images=len(info["pages"]))
-    remember_gallery_info(url, title=info["title"], images=result["images"], status="GOOD")
+    result.update(ok=True, title=info["title"], images=len(info["pages"]), tags=tag_utils.from_nhentai_info(info))
+    remember_gallery_info(url, title=info["title"], images=result["images"], status="GOOD", tags=result["tags"])
     return result
 
 
@@ -510,6 +639,26 @@ def download_album(
         failed_items is the list of picture-page / download URLs that failed.
         The gallery title, once known, is available with gallery_name(url).
     """
+    outages = throttle.network_outages()
+    result = _download_album_once(url, live_manager, image_format, rename_sequential, name_hint, create_cbz)
+    if not result[0] and (throttle.network_outages() != outages or not throttle.is_online()):
+        # The gallery failed while the internet connection was down: once it is back, try again
+        throttle.wait_while_paused()
+        live_manager.update_log("Connection check",
+                                "The internet connection was lost during this gallery: trying it again.")
+        result = _download_album_once(url, live_manager, image_format, rename_sequential, name_hint, create_cbz)
+    return result
+
+
+def _download_album_once(  # pylint: disable=too-many-arguments,too-many-positional-arguments
+    url: str,
+    live_manager: LiveManager,
+    image_format: str,
+    rename_sequential: bool | None,
+    name_hint: str,
+    create_cbz: bool | None,
+) -> tuple[bool, list[str]]:
+    """download_album() without the second try after a connection loss."""
     failed_items: list[str] = []
     remember_gallery_name(url, name_hint)
     if not nhentai.is_nhentai_url(url) and not has_account_cookies():
@@ -532,13 +681,27 @@ def download_album(
             title=album_downloader.clean_album_name,
             images=album_downloader.total_images,
             status="GOOD",
+            tags=album_downloader.gallery_tags,
         )
-        with live_manager.live:
-            failed_items = album_downloader.download_album()
-            live_manager.stop()
-            has_failures = bool(failed_items)
-            update_failed_url(url, has_failures)
-            return not has_failures, failed_items
+        badge = tag_utils.badge_for(album_downloader.gallery_tags)
+        folder = tag_utils.folder_for(album_downloader.gallery_tags)
+        if badge:
+            live_manager.update_log(
+                "Favorite tag",
+                f"{badge}" + (f" → saved in the \"{folder}\" folder" if folder else ""),
+            )
+        stats.album_started()
+        try:
+            with live_manager.live:
+                failed_items = album_downloader.download_album()
+                live_manager.stop()
+        finally:
+            stats.album_finished()
+        has_failures = bool(failed_items)
+        if not has_failures and not album_downloader.skipped_complete and album_downloader.images_downloaded:
+            stats.add_gallery(album_downloader.stats_site, album_downloader.gallery_tags)
+        update_failed_url(url, has_failures)
+        return not has_failures, failed_items
 
     except KeyboardInterrupt:
         sys.exit(1)

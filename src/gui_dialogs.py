@@ -15,7 +15,7 @@ import webbrowser
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
-from src import cookie_import, image_formats, paths
+from src import cookie_import, image_formats, paths, tags as tag_utils
 from src.image_formats import OPEN_FORMATS_NOTE
 from src.config import (APP_VERSION, DISCLAIMER_SNOOZE_DAYS, FORMAT_NOTICE_SNOOZE_DAYS, ISSUES_URL, PROJECT_URL,
                         UPSTREAM_URL)
@@ -391,6 +391,258 @@ class AccountDialog:  # pylint: disable=too-few-public-methods
             return
         self.win.destroy()
         self.on_saved()
+
+
+FAVORITE_TAGS_HELP = (
+    "Click ☐ / ★ (or double-click, Space) to make a tag a favorite. The list fills up by itself with "
+    "the tags of every gallery you verify or download (and how many galleries had them); a few common "
+    "tags are offered from the start (\"suggested\"), and you can add any tag, e.g. artist:name.\n"
+    "Favorites show as a coloured label in the lists; with more than one, the highest wins (▲ ▼). "
+    f"Select a favorite to change its label (capitals, max {tag_utils.BADGE_MAX} characters, also the "
+    "folder name) and its colour. Drag the column borders to resize them."
+)
+
+
+class FavoriteTagsDialog:  # pylint: disable=too-few-public-methods,too-many-instance-attributes
+    """Settings → Favorite tags…: the tags met in the galleries, each with a favorite selector."""
+
+    COLUMNS = (("fav", "★", 50, "center"), ("tag", "Tag", 240, "w"), ("label", "Label", 200, "w"),
+               ("seen", "Galleries", 80, "e"))
+
+    def __init__(self, root, palette: dict, fonts: dict, favorites: list[dict], folders: bool,  # pylint: disable=too-many-arguments,too-many-positional-arguments
+                 on_saved) -> None:
+        """on_saved(favorites, folders) is called with the new values."""
+        self.palette, self.fonts, self.on_saved = palette, fonts, on_saved
+        tag_utils.set_favorites(favorites)
+        # tag -> {"tag", "label", "favorite", "seen", "suggested"}; favorites keep their order
+        self.rows = {row["tag"]: row for row in tag_utils.catalog()}
+        self.order = [row["tag"] for row in self.rows.values() if row["favorite"]]
+        self.folders = tk.BooleanVar(value=folders)
+        self.filter = tk.StringVar()
+        self.new_tag = tk.StringVar()
+        self.label = tk.StringVar()
+        self._label_tag: str | None = None  # favorite whose label is in the entry
+        self.win = _dialog(root, f"{APP_NAME} – Favorite tags", palette, 760, 660)
+        self._build()
+        self._refresh()
+        self.filter.trace_add("write", lambda *_: self._refresh())
+        self.win.grab_set()
+
+    def _build(self) -> None:
+        palette, fonts = self.palette, self.fonts
+        card = ttk.Frame(self.win, style="Card.TFrame")
+        card.pack(fill="both", expand=True, padx=12, pady=12)
+        inner = tk.Frame(card, bg=palette["PANEL"])
+        inner.pack(fill="both", expand=True, padx=14, pady=12)
+        tk.Label(inner, text="Favorite tags", bg=palette["PANEL"], fg=palette["TEXT"], font=fonts["head"],
+                 anchor="w").pack(fill="x", pady=(0, 4))
+        tk.Label(inner, text=FAVORITE_TAGS_HELP, bg=palette["PANEL"], fg=palette["TEXT_SEC"], font=fonts["small"],
+                 justify="left", anchor="w", wraplength=640).pack(fill="x", pady=(0, 8))
+
+        tools = tk.Frame(inner, bg=palette["PANEL"])
+        tools.pack(fill="x", pady=(0, 6))
+        tk.Label(tools, text="🔍", bg=palette["PANEL"], fg=palette["TEXT_SEC"], font=fonts["small"]).pack(side="left")
+        ttk.Entry(tools, textvariable=self.filter, width=22, font=fonts["ui"]).pack(side="left", padx=(4, 16))
+        tk.Label(tools, text="Add a tag:", bg=palette["PANEL"], fg=palette["TEXT_SEC"],
+                 font=fonts["small"]).pack(side="left")
+        add_entry = ttk.Entry(tools, textvariable=self.new_tag, width=20, font=fonts["ui"])
+        add_entry.pack(side="left", padx=4)
+        add_entry.bind("<Return>", lambda _e: self._add_tag())
+        ttk.Button(tools, text="＋ Add", style="Ghost.TButton", command=self._add_tag, width=0).pack(side="left")
+
+        frame = tk.Frame(inner, bg=palette["BORDER"], bd=1)
+        frame.pack(fill="both", expand=True)
+        style = ttk.Style(self.win)
+        style.configure("Fav.Treeview", background=palette["PANEL"], fieldbackground=palette["PANEL"],
+                        foreground=palette["TEXT"], font=fonts["ui"], rowheight=22, borderwidth=0)
+        style.configure("Fav.Treeview.Heading", background=palette["BORDER"], foreground=palette["TEXT"],
+                        font=fonts["small"], relief="flat")
+        style.map("Fav.Treeview", background=[("selected", palette["SELECT_BG"])],
+                  foreground=[("selected", palette["TEXT"])])
+        self.tree = ttk.Treeview(frame, columns=[c[0] for c in self.COLUMNS], show="headings",
+                                 style="Fav.Treeview", selectmode="browse", height=9)
+        for key, title, width, anchor in self.COLUMNS:
+            self.tree.heading(key, text=title, anchor=anchor)
+            # every column can be resized by dragging the header borders; tag and label share the space
+            self.tree.column(key, width=width, minwidth=40, anchor=anchor, stretch=key in ("tag", "label"))
+        self.tree.tag_configure("favorite", font=fonts["head"])
+        self.tree.tag_configure("suggested", foreground=palette["MUTED"])
+        scroll = ttk.Scrollbar(frame, orient="vertical", command=self.tree.yview)
+        self.tree.configure(yscrollcommand=scroll.set)
+        scroll.pack(side="right", fill="y")
+        self.tree.pack(side="left", fill="both", expand=True)
+        self.tree.bind("<Button-1>", self._on_click)
+        self.tree.bind("<Double-1>", lambda _e: self._toggle(self._selected()))
+        self.tree.bind("<space>", lambda _e: self._toggle(self._selected()))
+        self.tree.bind("<<TreeviewSelect>>", lambda _e: self._on_select())
+
+        self.count_lbl = tk.Label(inner, text="", bg=palette["PANEL"], fg=palette["TEXT_SEC"], font=fonts["small"],
+                                  anchor="w")
+        self.count_lbl.pack(fill="x", pady=(4, 0))
+
+        # Selected favorite: label and priority
+        edit = tk.Frame(inner, bg=palette["PANEL"])
+        edit.pack(fill="x", pady=(6, 0))
+        tk.Label(edit, text="Label of the selected favorite:", bg=palette["PANEL"], fg=palette["TEXT_SEC"],
+                 font=fonts["small"]).pack(side="left")
+        self.label_entry = ttk.Entry(edit, textvariable=self.label, width=18, font=fonts["ui"], state="disabled")
+        self.label_entry.pack(side="left", padx=6)
+        self.label_entry.bind("<Return>", lambda _e: self._apply_label())
+        self.label_entry.bind("<FocusOut>", lambda _e: self._apply_label())
+        self.up_btn = ttk.Button(edit, text="▲", style="Ghost.TButton", width=3, state="disabled",
+                                 command=lambda: self._move(-1))
+        self.up_btn.pack(side="left", padx=(10, 2))
+        self.down_btn = ttk.Button(edit, text="▼", style="Ghost.TButton", width=3, state="disabled",
+                                   command=lambda: self._move(1))
+        self.down_btn.pack(side="left")
+        self.color_btn = tk.Button(edit, text="  Colour…  ", relief="flat", bd=0, cursor="hand2", state="disabled",
+                                   font=fonts["small"], command=self._choose_color)
+        self.color_btn.pack(side="left", padx=(12, 0))
+
+        tk.Checkbutton(inner, text="Sort downloads into folders by favorite tag "
+                                   "(Downloads/<site>/<label>/<gallery>)",
+                       variable=self.folders, bg=palette["PANEL"], fg=palette["TEXT"], font=fonts["small"],
+                       activebackground=palette["PANEL"], selectcolor=palette["PANEL"],
+                       highlightthickness=0, anchor="w").pack(fill="x", pady=(8, 0))
+        tk.Label(inner, text="Galleries without a favorite tag stay in Downloads/<site>. Lines already in the "
+                             "batch list get their label after Verify Links.",
+                 bg=palette["PANEL"], fg=palette["TEXT_SEC"], font=fonts["small"], justify="left", anchor="w",
+                 wraplength=640).pack(fill="x", pady=(4, 0))
+        bottom = tk.Frame(self.win, bg=palette["BG"])
+        bottom.pack(fill="x", padx=12, pady=(0, 12))
+        ttk.Button(bottom, text="💾  Save", style="Accent.TButton", command=self._save).pack(side="right")
+        ttk.Button(bottom, text="Cancel", style="Ghost.TButton", command=self.win.destroy).pack(side="right", padx=6)
+
+    # ------------------------------------------------------------------ list
+
+    def _refresh(self, select: str | None = None) -> None:
+        """Rebuild the rows: favorites first (in priority order), then the others."""
+        needle = self.filter.get().strip().lower()
+        self.tree.delete(*self.tree.get_children())
+        others = [tag for tag, row in self.rows.items() if not row["favorite"]]
+        others.sort(key=lambda tag: (self.rows[tag]["suggested"], -self.rows[tag]["seen"], tag))
+        for position, tag in enumerate(self.order + others):
+            row = self.rows[tag]
+            if needle and needle not in tag and needle not in row["label"].lower():
+                continue
+            if row["favorite"]:
+                values = (f"★ {position + 1}", tag, tag_utils.badge_text(row["label"]), row["seen"] or "")
+                color_tag = f"color_{row['color'][1:]}"
+                # the row has the colour of its label in the lists
+                self.tree.tag_configure(color_tag, background=row["color"], foreground=tag_utils.text_color(row["color"]))
+                tags = ("favorite", color_tag)
+            else:
+                seen = row["seen"] or ("suggested" if row["suggested"] else "")
+                values = ("☐", tag, "", seen)
+                tags = ("suggested",) if row["suggested"] else ()
+            self.tree.insert("", "end", iid=tag, values=values, tags=tags)
+        favorites, seen = len(self.order), tag_utils.seen_count()
+        self.count_lbl.configure(text=f"{favorites} favorite{'s' if favorites != 1 else ''} · "
+                                      f"{seen} tag{'s' if seen != 1 else ''} met in your galleries")
+        if select and self.tree.exists(select):
+            self.tree.selection_set(select)
+            self.tree.see(select)
+        self._on_select()
+
+    def _selected(self) -> str | None:
+        selection = self.tree.selection()
+        return selection[0] if selection else None
+
+    def _on_click(self, event) -> None:
+        """A click in the ★ column switches the favorite on / off."""
+        if self.tree.identify_region(event.x, event.y) != "cell" or self.tree.identify_column(event.x) != "#1":
+            return
+        tag = self.tree.identify_row(event.y)
+        if tag:
+            self._toggle(tag)
+
+    def _toggle(self, tag: str | None) -> None:
+        if not tag or tag not in self.rows:
+            return
+        self._apply_label()
+        row = self.rows[tag]
+        row["favorite"] = not row["favorite"]
+        if row["favorite"]:
+            used = {self.rows[t]["color"] for t in self.order}
+            row["color"] = row.get("color") or next(
+                (c for c in tag_utils.DEFAULT_COLORS if c not in used), tag_utils.default_color(len(self.order)))
+            self.order.append(tag)
+        else:
+            self.order.remove(tag)
+        self._refresh(select=tag)
+
+    def _on_select(self) -> None:
+        tag = self._selected()
+        is_fav = bool(tag and self.rows.get(tag, {}).get("favorite"))
+        self.label.set(self.rows[tag]["label"] if is_fav else "")
+        self._label_tag = tag if is_fav else None
+        self.label_entry.configure(state="normal" if is_fav else "disabled")
+        color = self.rows[tag]["color"] if is_fav else self.palette["PANEL"]
+        self.color_btn.configure(state="normal" if is_fav else "disabled", bg=color,
+                                 fg=tag_utils.text_color(color) if is_fav else self.palette["MUTED"],
+                                 activebackground=color)
+        index = self.order.index(tag) if is_fav else -1
+        self.up_btn.configure(state="normal" if is_fav and index > 0 else "disabled")
+        self.down_btn.configure(state="normal" if is_fav and index < len(self.order) - 1 else "disabled")
+
+    def _apply_label(self) -> None:
+        """Store the label typed for the selected favorite."""
+        tag = self._label_tag
+        if not tag or tag not in self.rows:
+            return
+        label = " ".join(self.label.get().split()) or tag_utils.split(tag)[1]
+        if label != self.rows[tag]["label"]:
+            self.rows[tag]["label"] = label
+            self._refresh(select=tag)
+
+    def _choose_color(self) -> None:
+        """'Colour…': pick the colour of the selected favorite."""
+        tag = self._label_tag
+        if not tag or tag not in self.rows:
+            return
+        from tkinter import colorchooser  # pylint: disable=import-outside-toplevel
+        _rgb, chosen = colorchooser.askcolor(color=self.rows[tag]["color"], parent=self.win,
+                                             title=f"Colour of {tag}")
+        if chosen:
+            self.rows[tag]["color"] = chosen.upper()
+            self._refresh(select=tag)
+
+    def _move(self, delta: int) -> None:
+        tag = self._selected()
+        if not tag or tag not in self.order:
+            return
+        self._apply_label()
+        index = self.order.index(tag)
+        target = index + delta
+        if 0 <= target < len(self.order):
+            self.order[index], self.order[target] = self.order[target], self.order[index]
+            self._refresh(select=tag)
+
+    def _add_tag(self) -> None:
+        """'Add': a tag typed by the user becomes a favorite."""
+        parsed = tag_utils.parse_favorites(self.new_tag.get())
+        if not parsed:
+            return
+        tag = parsed[0]["tag"]
+        name = tag_utils.split(tag)[1]
+        existing = tag if tag in self.rows else (name if name in self.rows and ":" not in tag else None)
+        if existing is None:
+            self.rows[tag] = {"tag": tag, "label": parsed[0]["label"], "color": "", "favorite": False,
+                              "seen": 0, "suggested": False}
+            existing = tag
+        self.new_tag.set("")
+        self.filter.set("")
+        if not self.rows[existing]["favorite"]:
+            self._toggle(existing)
+        else:
+            self._refresh(select=existing)
+
+    def _save(self) -> None:
+        self._apply_label()
+        favorites = [{"tag": tag, "label": self.rows[tag]["label"], "color": self.rows[tag]["color"]}
+                     for tag in self.order]
+        self.win.destroy()
+        self.on_saved(tag_utils.clean_favorites(favorites), bool(self.folders.get()))
 
 
 def platform_note() -> str:

@@ -10,7 +10,8 @@ import os
 import zipfile
 from pathlib import Path
 
-from src.config import CBZ_COMIC_INFO, DOWNLOAD_FOLDER
+from src import config
+from src.config import CBZ_COMIC_INFO
 from src.file_utils import MAX_NAME_BYTES, sanitize_directory_name
 
 PART_SUFFIX = ".part"  # same ending as AlbumDownloader._part_path
@@ -69,8 +70,13 @@ class CbzArchiveMixin:  # pylint: disable=too-few-public-methods
         Also recognizes archives made by earlier versions: "Downloads/<title>.cbz" and
         "Downloads/<album>/*.cbz".
         """
-        candidates = [self._cbz_path(), self._cbz_path(Path(DOWNLOAD_FOLDER))]
-        old_folder = Path(DOWNLOAD_FOLDER) / sanitize_directory_name(self.clean_album_name)
+        downloads = Path(config.DOWNLOAD_FOLDER)
+        candidates = list(dict.fromkeys([
+            self._cbz_path(),
+            self._cbz_path(getattr(self, "site_root_folder", self.site_download_folder)),
+            self._cbz_path(downloads),
+        ]))
+        old_folder = downloads / sanitize_directory_name(self.clean_album_name)
         if old_folder.is_dir():
             candidates.extend(sorted(old_folder.glob("*.cbz")))
         for cbz in candidates:

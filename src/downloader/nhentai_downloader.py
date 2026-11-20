@@ -15,7 +15,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests
 
-from src import image_formats, nhentai, throttle
+from src import image_formats, nhentai, stats, tags as tag_utils, throttle
 from src.config import (
     CHUNK_SIZE,
     CONNECTION_TIMEOUT,
@@ -71,6 +71,7 @@ class NHentaiAlbumDownloader(AlbumDownloader):
         self.album_name = f"{self.clean_album_name}_nhentai_{self.gallery_id}"
         self.page_exts: list[str] = self.info["pages"]
         self.total_images = len(self.page_exts)
+        self.gallery_tags = tag_utils.from_nhentai_info(self.info)
         self.extra_info = {
             "Writer": ", ".join(self.info.get("artists", [])),
             "Series": ", ".join(self.info.get("parodies", [])),
@@ -129,6 +130,7 @@ class NHentaiAlbumDownloader(AlbumDownloader):
                     if chunk:
                         chunks.append(chunk)
                         downloaded += len(chunk)
+                        stats.add_bytes("nhentai", len(chunk))
                         if hasattr(self.live_manager, "update_page_stream"):
                             self.live_manager.update_page_stream(page_number, downloaded, total_bytes)
                 if total_bytes and downloaded < total_bytes:
@@ -138,9 +140,13 @@ class NHentaiAlbumDownloader(AlbumDownloader):
                     self.live_manager.finish_page_stream(page_number)
                 return response
             except requests.ConnectionError as err:
+                if throttle.wait_if_offline(err):  # no internet: wait for it, then this mirror again
+                    continue
                 # Server unreachable (DNS, refused): switch mirror at once instead of waiting
                 raise requests.RequestException(f"server unreachable: {err}") from err
             except requests.RequestException as err:
+                if throttle.wait_if_offline(err):
+                    continue
                 last_error = err
                 if attempt < IMAGE_FETCH_RETRIES - 1:
                     time.sleep(2 ** (attempt + 1) + random.uniform(0.5, 1.5))  # noqa: S311
@@ -236,6 +242,8 @@ class NHentaiAlbumDownloader(AlbumDownloader):
             )
             if hasattr(self.live_manager, "count_downloaded_image"):  # GUI session counter
                 self.live_manager.count_downloaded_image()
+            stats.add_image("nhentai")
+            self.images_downloaded += 1
             _mark_done()
             time.sleep(random.uniform(*NHENTAI_IMAGE_DELAY))  # noqa: S311
 

@@ -38,10 +38,22 @@ function el(tag, attrs, ...children) {
 }
 
 function fmtSize(bytes) {
-  const units = ["B", "KB", "MB", "GB"];
+  const units = ["B", "KB", "MB", "GB", "TB"];
   let n = bytes, i = 0;
   while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
   return `${n.toFixed(i ? 1 : 0)} ${units[i]}`;
+}
+
+function fmtSpeed(bytesPerSecond) {
+  return bytesPerSecond > 0 ? `${fmtSize(bytesPerSecond)}/s` : "—";
+}
+
+function fmtDuration(seconds) {
+  seconds = Math.floor(seconds || 0);
+  const h = Math.floor(seconds / 3600), m = Math.floor((seconds % 3600) / 60), s = seconds % 60;
+  if (h) return `${h}h ${String(m).padStart(2, "0")}m`;
+  if (m) return `${m}m ${String(s).padStart(2, "0")}s`;
+  return `${s}s`;
 }
 
 function fmtTime(seconds) {
@@ -117,15 +129,17 @@ document.addEventListener("click", (e) => {
 });
 
 function showTab(name) {
+  if (!document.getElementById(`tab-${name}`)) name = "single";
   $$(".tab").forEach((t) => t.classList.toggle("active", t.dataset.tab === name));
   $$(".tab-page").forEach((p) => p.classList.toggle("hidden", p.id !== `tab-${name}`));
   try { localStorage.setItem("ehd-tab", name); } catch (_) { /* private mode */ }
+  if (name === "stats") setTimeout(refreshStats, 0);
 }
 $$(".tab").forEach((t) => t.addEventListener("click", () => showTab(t.dataset.tab)));
 try { showTab(localStorage.getItem("ehd-tab") || "single"); } catch (_) { showTab("single"); }
 
 const actions = {
-  logfile: showLogFile, account: showAccount, updates: checkUpdates,
+  logfile: showLogFile, account: showAccount, updates: checkUpdates, favorites: showFavorites,
   disclaimer: () => showDisclaimer(false), license: showLicense, about: showAbout,
 };
 $$("[data-action]").forEach((b) => b.addEventListener("click", () => actions[b.dataset.action]()));
@@ -214,23 +228,100 @@ $("#batch-list").addEventListener("paste", (e) => {
   addLinks((e.clipboardData || window.clipboardData).getData("text"));
 });
 
+const STATUS_ICONS = { GOOD: "✅", BAD: "❌" };
+
+// Black or white text on a label colour (same rule as src/tags.py text_color)
+function inkFor(hex) {
+  const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex || "");
+  if (!m) return "#FFFFFF";
+  const [r, g, b] = m.slice(1).map((x) => parseInt(x, 16));
+  return 0.299 * r + 0.587 * g + 0.114 * b > 160 ? "#1A1A1A" : "#FFFFFF";
+}
+
+// Columns: ✅ | [logo] | [ NETORARE ] | 123 | Title — the link is not shown
+function lineCells(line) {
+  if (!line.status) return [el("span", { class: "st" }), el("span", { class: "txt wide", text: line.title || line.text || " " })];
+  const cells = [el("span", { class: "st", text: STATUS_ICONS[line.status] || "" })];
+  const logo = el("img", { class: "site-logo", src: `/sitelogo/${line.site}`, alt: line.site, title: line.site });
+  logo.addEventListener("error", () => logo.replaceWith(el("span", { class: "site-name", text: line.site })), { once: true });
+  const badge = line.badge
+    ? el("span", { class: "badge", text: line.badge, style: line.color ? `background:${line.color};color:${line.ink}` : "" })
+    : el("span", {});
+  cells.push(el("span", { class: "c-site" }, logo), el("span", { class: "c-tag" }, badge),
+    el("span", { class: "c-pages", text: line.images ? String(line.images) : "-", title: "Images" }),
+    el("span", { class: "txt", text: line.title || " " }));
+  return cells;
+}
+
+function lineMovable(line) {
+  return S.mode !== "verify" && S.mode !== "retry" && S.mode !== "single" && !["active", "done"].includes(line.state);
+}
+
+let dragId = null;
+
 function renderLines() {
   const box = $("#batch-list");
   const atBottom = box.scrollTop + box.clientHeight >= box.scrollHeight - 4;
+  const scroll = box.scrollTop;
   box.replaceChildren();
   if (!S.lines.length) {
     box.append(el("div", { class: "empty", text: "The list is empty: paste links above (or Ctrl+V here)." }));
     return;
   }
   S.lines.forEach((line, i) => {
-    box.append(el("div", { class: `line ${line.state}`, "data-id": line.id },
+    const movable = lineMovable(line) && !!line.text.trim();
+    const row = el("div", { class: `line ${line.state}`, "data-id": line.id, draggable: movable ? "true" : false },
       el("span", { class: "no", text: String(i + 1) }),
-      el("span", { class: "txt", text: line.text || " ", title: line.text }),
-      el("button", { class: "del", title: "Remove this line", text: "✕", onclick: () => deleteLine(line.id) })));
+      ...lineCells(line),
+      el("button", { class: "move", title: "Move up", text: "▲", disabled: !movable || i === 0,
+        onclick: () => moveLine(line.id, i - 1) }),
+      el("button", { class: "move", title: "Move down", text: "▼", disabled: !movable || i === S.lines.length - 1,
+        onclick: () => moveLine(line.id, i + 1) }),
+      el("button", { class: "del", title: "Remove this line", text: "✕", onclick: () => deleteLine(line.id) }));
+    if (movable) {
+      row.addEventListener("dragstart", (e) => { dragId = line.id; row.classList.add("dragging"); e.dataTransfer.effectAllowed = "move"; });
+      row.addEventListener("dragend", () => {
+        const dropped = dragId === null;
+        dragId = null;
+        row.classList.remove("dragging");
+        clearDropMarks();
+        if (!dropped) renderLines();  // dropped outside the list: show the latest state
+      });
+    }
+    row.addEventListener("dragover", (e) => {
+      if (dragId === null) return;
+      e.preventDefault();
+      const after = e.offsetY > row.clientHeight / 2;
+      clearDropMarks();
+      row.classList.add(after ? "drop-after" : "drop-before");
+    });
+    row.addEventListener("drop", (e) => {
+      if (dragId === null) return;
+      e.preventDefault();
+      const from = S.lines.findIndex((l) => l.id === dragId);
+      let to = i + (e.offsetY > row.clientHeight / 2 ? 1 : 0);
+      if (from < to) to -= 1;
+      const id = dragId;
+      dragId = null;
+      clearDropMarks();
+      if (from !== to) moveLine(id, to);
+    });
+    box.append(row);
   });
-  const active = box.querySelector(".line.active");
-  if (active && S.mode) active.scrollIntoView({ block: "nearest" });
-  else if (atBottom) box.scrollTop = box.scrollHeight;
+  box.scrollTop = atBottom ? box.scrollHeight : scroll;
+  // Follow the downloads only when none of them is on screen: with two sites at once the
+  // list would otherwise jump between them
+  const actives = [...box.querySelectorAll(".line.active")];
+  const visible = (row) => row.offsetTop >= box.scrollTop && row.offsetTop + row.offsetHeight <= box.scrollTop + box.clientHeight;
+  if (S.mode && actives.length && !actives.some(visible)) actives[0].scrollIntoView({ block: "nearest" });
+}
+
+function clearDropMarks() {
+  $$("#batch-list .drop-before, #batch-list .drop-after").forEach((r) => r.classList.remove("drop-before", "drop-after"));
+}
+
+async function moveLine(id, toIndex) {
+  try { await api(`/api/batch/line/${id}/move`, { to_index: toIndex }); poll(); } catch (err) { showError(err); }
 }
 
 async function deleteLine(id) {
@@ -341,7 +432,7 @@ function renderRetry() {
   box.replaceChildren();
   if (!S.retry.length) box.append(el("div", { class: "empty", text: "(no failed URLs found)" }));
   S.retry.forEach((item, i) => box.append(el("div", { class: `line ${item.state}` },
-    el("span", { class: "no", text: String(i + 1) }), el("span", { class: "txt", text: item.text, title: item.text }))));
+    el("span", { class: "no", text: String(i + 1) }), ...lineCells(item))));
   const active = box.querySelector(".line.active");
   if (active) active.scrollIntoView({ block: "nearest" });
   const n = S.retry.length;
@@ -412,7 +503,9 @@ function updateButtons() {
   $("#add-btn").disabled = busy && !batch;
   $("#add-text").disabled = busy && !batch;
   $("#format").disabled = busy;
-  $$("[data-setting=auto_rename], [data-setting=cbz_archive], [data-setting=comic_info]").forEach((c) => { c.disabled = busy; });
+  $$("[data-setting=auto_rename], [data-setting=cbz_archive], [data-setting=comic_info], [data-setting=tag_folders]")
+    .forEach((c) => { c.disabled = busy; });
+  $("[data-action=favorites]").disabled = busy;
   const canPause = busy && S.mode !== "verify";
   for (const b of [$("#pause-btn"), ...$$(".pause-twin")]) {
     b.disabled = !canPause;
@@ -444,6 +537,7 @@ function render(data) {
   const sp = data.speed;
   $("#speed-label").textContent = `Speed: ${sp.level}x ${sp.name} (${sp.workers} parallel)`;
   $("#speed-label").classList.toggle("risky", sp.level >= 5);
+  $("#speed-now").textContent = data.speed_now > 0 ? `⬇ ${fmtSpeed(data.speed_now)}` : "";
   const n = data.session_images;
   $("#session").textContent = `🖼 Today: ${n.toLocaleString()} image${n !== 1 ? "s" : ""}`;
   $("#session").title = `Images downloaded since ${String(data.counter_reset_hour).padStart(2, "0")}:00 ` +
@@ -467,10 +561,11 @@ function render(data) {
     appendLog(data.log.items, data.log.reset);
     if (data.log.items.length) S.since = data.log.items[data.log.items.length - 1].seq;
   }
+  document.documentElement.style.setProperty("--tag-col", `${(data.badge_width || 4) + 2}ch`);
   if ("lines" in data) {
     S.lines = data.lines;
     S.linesRev = data.lines_rev;
-    if (!S.editing) renderLines();
+    if (!S.editing && dragId === null) renderLines();
     $("#estimate").textContent = data.estimate;
     $("#sort-offer").classList.toggle("hidden", !data.sort_offer || !!S.mode);
   }
@@ -495,7 +590,168 @@ async function poll() {
     pollTimer = setTimeout(poll, document.hidden ? 4000 : (S.mode ? 700 : 1500));
   }
 }
-document.addEventListener("visibilitychange", () => { if (!document.hidden) poll(); });
+document.addEventListener("visibilitychange", () => { if (!document.hidden) { poll(); refreshStats(); } });
+
+// ------------------------------------------------------------------ statistics
+
+const STAT_ROWS = [
+  ["Galleries · images", (b) => `${b.galleries.toLocaleString()} · ${b.images.toLocaleString()}`],
+  ["Downloaded", (b) => `${fmtSize(b.bytes)} in ${fmtDuration(b.busy_seconds)}`],
+  ["Speed average · peak", (b) => `${fmtSpeed(b.average_speed)} · ${fmtSpeed(b.peak_speed)}`],
+];
+let statsTimer = null;
+let statsTagsKey = "";
+
+async function refreshStats() {
+  clearTimeout(statsTimer);
+  if ($("#tab-stats").classList.contains("hidden")) return;
+  try {
+    const d = await api("/api/stats");
+    let now = `⬇ Now: ${fmtSpeed(d.current_speed)}`;
+    if (d.downloading) now += ` · ${d.downloading} galler${d.downloading !== 1 ? "ies" : "y"} downloading`;
+    $("#stats-now").textContent = now;
+    $("#stats-total-title").textContent = `Since ${d.first_start.slice(0, 10)}`;
+    $("#stats-session-title").textContent = `This session (${d.session_started.slice(-5)})`;
+    const rows = STAT_ROWS.map(([label, fn]) => el("tr", {}, el("td", { text: label }),
+      el("td", { text: fn(d.total) }), el("td", { text: fn(d.session) })));
+    Object.keys(d.site_labels).forEach((site, i) => {
+      const cell = (b) => `${b.sites[site].galleries.toLocaleString()} · ${b.sites[site].images.toLocaleString()} · ${fmtSize(b.sites[site].bytes)}`;
+      rows.push(el("tr", { class: `site${i === 0 ? " first-site" : ""}` }, el("td", { text: d.site_labels[site] }),
+        el("td", { text: cell(d.total) }), el("td", { text: cell(d.session) })));
+    });
+    rows.push(el("tr", { class: "site" }, el("td", { class: "muted", colspan: "3", text: "Sites: galleries · images · size" })));
+    $("#stats-body").replaceChildren(...rows);
+    const top = d.total.top_tags;
+    const key = JSON.stringify(top);
+    if (key !== statsTagsKey) {
+      statsTagsKey = key;
+      const most = Math.max(1, ...top.map((t) => t.count));
+      $("#stats-tags").replaceChildren(...(top.length ? top.map((t) => el("div", { class: "tag-row" },
+        el("span", { class: "name", text: t.tag, title: t.tag }), el("span", { class: "count", text: String(t.count) }),
+        el("div", { class: "bar-mini", style: `width:${Math.max(4, Math.round(t.count / most * 100))}%` })))
+        : [el("div", { class: "empty", text: "No completed gallery yet: the tags of every downloaded gallery are counted here." })]));
+    }
+  } catch (err) {
+    $("#stats-now").textContent = `⚠ ${err.message}`;
+  }
+  statsTimer = setTimeout(refreshStats, document.hidden ? 5000 : 1000);
+}
+$("#stats-reset").addEventListener("click", async () => {
+  if (!await confirmBox("Reset statistics", "Delete every statistic (since the first start and this session)?\n" +
+    "This cannot be undone.", "Reset", "Cancel")) return;
+  try { await api("/api/stats/reset", {}); statsTagsKey = ""; refreshStats(); } catch (err) { showError(err); }
+});
+
+// ------------------------------------------------------------------ favorite tags
+
+async function showFavorites() {
+  let data;
+  try { data = await api("/api/tags"); } catch (err) { showError(err); return; }
+  const rows = new Map(data.tags.map((t) => [t.tag, { ...t }]));
+  let order = data.tags.filter((t) => t.favorite).map((t) => t.tag);
+  const width = data.badge_max;
+  const badgeText = (label) => label.replace(/\|/g, "/").split(/\s+/).join(" ").trim().toUpperCase().slice(0, width).trim();
+
+  const filter = el("input", { type: "text", placeholder: "🔍 Filter", spellcheck: "false" });
+  const add = el("input", { type: "text", placeholder: "Add a tag (e.g. artist:name = Label)", spellcheck: "false" });
+  const count = el("div", { class: "note" });
+  const table = el("div", { class: "list fav-list" });
+  const folders = el("input", { type: "checkbox" });
+  folders.checked = !!(S.settings && S.settings.tag_folders);
+
+  function draw() {
+    const needle = filter.value.trim().toLowerCase();
+    const others = [...rows.values()].filter((r) => !r.favorite)
+      .sort((a, b) => (a.suggested - b.suggested) || (b.seen - a.seen) || a.tag.localeCompare(b.tag));
+    const list = [...order.map((t) => rows.get(t)), ...others];
+    table.replaceChildren(el("div", { class: "fav-row head" }, el("span", { text: "★" }), el("span", { text: "Tag" }),
+      el("span", { text: "Label" }), el("span", { text: "Galleries" }), el("span", { text: "" })));
+    list.forEach((r) => {
+      if (needle && !r.tag.includes(needle) && !r.label.toLowerCase().includes(needle)) return;
+      const box = el("input", { type: "checkbox" });
+      box.checked = r.favorite;
+      const badge = el("span", { class: "badge", text: badgeText(r.label), style: r.color ? `background:${r.color};color:${inkFor(r.color)}` : "" });
+      box.addEventListener("change", () => {
+        r.favorite = box.checked;
+        if (r.favorite && !r.color) {
+          const used = new Set(order.map((t) => rows.get(t).color));
+          r.color = data.colors.find((c) => !used.has(c)) || data.colors[order.length % data.colors.length];
+        }
+        order = r.favorite ? [...order, r.tag] : order.filter((t) => t !== r.tag);
+        draw();
+      });
+      let label = el("span", {});
+      let moves = el("span", {});
+      let color = el("span", {});
+      if (r.favorite) {
+        color = el("input", { type: "color", value: r.color || "#C2185B", title: "Colour of the label" });
+        color.addEventListener("input", () => {
+          r.color = color.value.toUpperCase();
+          badge.style.background = r.color;
+          badge.style.color = inkFor(r.color);
+        });
+        label = el("input", { type: "text", value: r.label, spellcheck: "false", maxlength: "40", title: "Label shown in the lists and folder name" });
+        label.addEventListener("change", () => { r.label = label.value.trim() || r.tag.split(":").pop(); draw(); });
+        const i = order.indexOf(r.tag);
+        moves = el("span", { class: "fav-moves" },
+          el("button", { class: "move", text: "▲", title: "Higher priority", disabled: i === 0,
+            onclick: () => { [order[i - 1], order[i]] = [order[i], order[i - 1]]; draw(); } }),
+          el("button", { class: "move", text: "▼", title: "Lower priority", disabled: i === order.length - 1,
+            onclick: () => { [order[i + 1], order[i]] = [order[i], order[i + 1]]; draw(); } }));
+      }
+      table.append(el("label", { class: `fav-row${r.favorite ? " fav" : ""}${r.suggested ? " suggested" : ""}` },
+        box,
+        el("span", { class: "fav-tag" }, r.tag, r.favorite ? badge : null),
+        el("span", { class: "fav-label" }, label, color),
+        el("span", { class: "fav-seen", text: r.seen ? String(r.seen) : (r.suggested ? "suggested" : "") }),
+        moves));
+    });
+    count.textContent = `${order.length} favorite${order.length !== 1 ? "s" : ""} · ${data.seen} tag${data.seen !== 1 ? "s" : ""} met in your galleries`;
+  }
+  filter.addEventListener("input", draw);
+  const addTag = () => {
+    const [left, ...rest] = add.value.split("=");
+    const tag = left.trim().toLowerCase().replace(/[\s_]+/g, " ").replace(/\s*:\s*/, ":");
+    if (!tag) return;
+    const name = tag.split(":").pop();
+    const key = rows.has(tag) ? tag : (!tag.includes(":") && rows.has(name) ? name : tag);
+    if (!rows.has(key)) rows.set(key, { tag: key, label: rest.join("=").trim() || name, color: "", favorite: false, seen: 0, suggested: false });
+    const r = rows.get(key);
+    if (rest.join("=").trim()) r.label = rest.join("=").trim();
+    if (!r.favorite) {
+      const used = new Set(order.map((t) => rows.get(t).color));
+      r.color = r.color || data.colors.find((c) => !used.has(c)) || data.colors[0];
+      r.favorite = true;
+      order.push(key);
+    }
+    add.value = "";
+    filter.value = "";
+    draw();
+  };
+  add.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); addTag(); } });
+  draw();
+
+  const body = el("div", { class: "fav-dialog" },
+    el("p", { class: "note", text: "Tick a tag to make it a favorite. The list fills up by itself with the tags of every gallery " +
+      "you verify or download (and how many galleries had them); a few common tags are offered from the start " +
+      "(\"suggested\"), and you can add any tag yourself, e.g. an artist (artist:name)." }),
+    el("p", { class: "note", text: `Favorites show as a coloured label in the lists; when a gallery has more than one, the highest ` +
+      `wins (▲ ▼). Each favorite has its own label (capitals, max ${width} characters, also the folder name) and colour.` }),
+    el("div", { class: "fav-tools" }, filter, add, el("button", { class: "btn ghost", text: "＋ Add", onclick: addTag })),
+    table, count,
+    el("label", { class: "note" }, folders, " Sort downloads into folders by favorite tag (<site>/<label>/<gallery>)"),
+    el("p", { class: "note", text: "Galleries without a favorite tag stay in E-Hentai/ or nhentai/. Lines already in the list get " +
+      "their label after Verify Links." }));
+  await modal("Favorite tags", body, [
+    { label: "Cancel", value: false },
+    { label: "Save", value: true, cls: "accent", action: async () => {
+      const favorites = order.map((t) => ({ tag: t, label: rows.get(t).label, color: rows.get(t).color }));
+      S.settings = await api("/api/settings", { favorite_tags: favorites, tag_folders: folders.checked });
+      applySettings();
+      poll();
+    } },
+  ]);
+}
 
 // ------------------------------------------------------------------ dialogs
 

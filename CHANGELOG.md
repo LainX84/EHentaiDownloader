@@ -4,6 +4,68 @@ All notable changes to this fork of EHentai Downloader. Versions follow the rele
 (`v<version>`); the ready-to-use apps of each version are on the
 [releases page](https://github.com/LainX84/EHentaiDownloader/releases).
 
+## [2.1.0] – 2026-11-20
+
+### Added
+- **Statistics tab** (desktop and Docker / web): totals since the first start (kept in
+  `stats.json`) and for this session. For each site (E-Hentai, ExHentai, nhentai) it shows
+  galleries, images and size. It also shows the time spent downloading, the average and peak
+  speed, the speed right now, and the **most downloaded tags** (content tags of the completed
+  galleries: not artist, language or parody). *Reset* starts again from zero. The current speed
+  is also shown in the status bar.
+- **Gallery tags** are read from the gallery page (E-Hentai / ExHentai) and from the nhentai data,
+  when a link is verified and when it is downloaded.
+- **Favorite tags** (*Settings → Favorite tags…*): a list of the tags met in your galleries,
+  each with a selector (☐ / ★) to make it a favorite. The list fills up by itself with the tags
+  of every gallery verified or downloaded (saved in `tags.json`, with how many galleries had
+  them); a few common tags are offered from the start ("suggested") and any tag can be added
+  by hand (also `artist:name`). Each favorite has a label (`ai generated` → `AI`, up to 20
+  characters), **its own colour** and a priority (▲ ▼): when a gallery has more than one
+  favorite tag, the one with the highest priority is shown. The tags of every gallery are
+  remembered in `tags.json`, so the lists keep the right tag (and follow a new priority) also
+  after a restart. The columns of the window can be resized.
+- **Folders by favorite tag** (*Settings → Sort downloads into folders by favorite tag*, OFF by
+  default): a gallery with a favorite tag goes into `<site>/<label>/<gallery>` (for example
+  `E-Hentai/Netorare/…`); the others stay in `E-Hentai/` or `nhentai/`.
+- **Download folder** (desktop, *Settings → Download folder…* / *Use the default download
+  folder*): the finished albums can go to any folder (another drive, a NAS share…). Albums
+  still downloading stay in `temp/`.
+- **Queue order** (desktop and web): the lines not started yet can be moved (▲ ▼ next to the
+  list, Alt+Up / Alt+Down; on the web page also drag and drop) and removed (✖, Ctrl+Delete) while
+  the batch runs. Each site downloads its galleries in the order of the list, and removed lines
+  are skipped.
+
+- **Internet connection lost** (desktop and web): when a request fails and no site can be
+  reached at all, every download waits (the connection is checked every 10 s, shown in the
+  status bar) instead of failing, and goes on when it is back. The gallery that was
+  downloading is then gone through once more, skipping the pages already on disk, so no image
+  is lost; a gallery whose page could not be read during the outage is tried again.
+
+- **Minimize to the system tray** (desktop, Windows and Linux; *Settings → Minimize to system
+  tray*, ON by default): a minimized window goes to a tray icon next to the clock and the
+  downloads go on in the background. The icon menu has *Show EHentai Downloader* (also a click
+  on the icon), *Pause / Resume downloads*, *Open Downloads* and *Quit*; its tooltip shows what is
+  downloading and a notification says when the downloads are finished. Closing the window
+  while a download runs asks whether to keep downloading in the tray or stop and close. On macOS
+  the window is minimized to the Dock as before. Needs the new optional package `pystray`.
+
+### Changed
+- **README**: the animated demo is replaced by up-to-date screenshots (`assets/screenshots/`).
+- **List order**: after *Verify Links* and at *Start Batch* the list is sorted by itself (no
+  question any more): E-Hentai / ExHentai galleries first, then nhentai, and in each group the
+  galleries with fewer images first. Each site then goes down the list line by line, and the
+  list scrolls only when no gallery being downloaded is on screen (it no longer jumps up and
+  down between the two sites).
+- **Clearer lists, in columns**: `✅ | [site logo] | [ NETORARE ] | 123 | Gallery title`
+  (`❌` when the gallery can't be read): site, favorite tag (blank when none), number of
+  pages (centred) and title, aligned on every line. The link is hidden but still kept in the line, for
+  downloads, Retry and the log; when the title is unknown, the link is shown instead.
+  `URLs.txt` and `failed_downloads.txt` lines are now `✅ NHENTAI | TAG | IMAGES | TITLE | LINK`;
+  older lines (`GOOD | 35 | title | link`) are still read and rewritten in the new form.
+- Site logos: `assets/sites/` (original 40×10 badges, sized on the text). Put your own
+  `ehentai.png`, `exhentai.png`, `nhentai.png` in a `logos/` folder next to `URLs.txt` (Docker:
+  `/config/logos/`) to use other images.
+
 ## [2.0.4] – 2026-11-15
 
 ### Changed

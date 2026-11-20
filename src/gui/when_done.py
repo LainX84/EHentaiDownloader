@@ -17,6 +17,7 @@ from src import throttle
 from src.file_utils import append_session_banner
 
 from src.gui import style
+from src.gui.tray import tray_area_available
 from src.gui.style import (
     FONT_UI, PAD, WHEN_DONE_COUNTDOWN, WHEN_DONE_CLOSE, WHEN_DONE_NOTHING, WHEN_DONE_SHUTDOWN, btn as _btn,
     ts as _ts,
@@ -146,6 +147,8 @@ class WhenDoneMixin:  # pylint: disable=too-few-public-methods,no-member
         choice = self._when_done_var.get()
         if choice == WHEN_DONE_NOTHING:
             return
+        if getattr(self, "_tray_hidden", False):
+            self._show_from_tray()   # the countdown (with its Cancel button) must be visible
         action = "Closing the program" if choice == WHEN_DONE_CLOSE else "Shutting down the PC"
         append_session_banner(f"WHEN DONE: {choice.upper()} (countdown {WHEN_DONE_COUNTDOWN}s)")
 
@@ -239,6 +242,22 @@ class WhenDoneMixin:  # pylint: disable=too-few-public-methods,no-member
         """Handler called when user closes the GUI window."""
         if self._running and throttle.is_paused():
             append_session_banner("APPLICATION CLOSED (download paused, list saved)")
+        elif self._running and self._tray_enabled() and tray_area_available():
+            answer = messagebox.askyesnocancel(
+                "Close Application",
+                "A download is in progress.\n\n"
+                "Yes: keep downloading in the background (the window goes to the system tray).\n"
+                "No: stop the download and close the program.\n"
+                "Cancel: go back.",
+            )
+            if answer is None:
+                return
+            if answer:
+                if not self._hide_to_tray("Window hidden in the system tray: the downloads go on. "
+                                          "Use Quit in the tray menu to close the program."):
+                    self.iconify()   # no tray after all: keep downloading, minimized
+                return
+            append_session_banner("APPLICATION CLOSED (running download interrupted by the user)")
         elif self._running:
             if not messagebox.askyesno(
                 "Close Application",
@@ -251,6 +270,7 @@ class WhenDoneMixin:  # pylint: disable=too-few-public-methods,no-member
         # Keep the list on disk: downloaded lines go away now, everything else is saved
         self._save_state_for_exit()
         self._closed = True
+        self._tray_stop()
         self.destroy()
 
     def _on_exit(self) -> None:

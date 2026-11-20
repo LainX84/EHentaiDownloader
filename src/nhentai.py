@@ -295,6 +295,8 @@ def _parse_gallery_json(data: dict, gid: str) -> dict:
         "paths": [str(p.get("path") or "").lstrip("/") if isinstance(p, dict) else "" for p in pages],
         "artists": by_type.get("artist", []) or by_type.get("group", []),
         "tags": by_type.get("tag", []),
+        # every tag as "type:name" (tag, artist, group, parody, character, language, category)
+        "all_tags": [f"{kind}:{name}" for kind, names in by_type.items() for name in names],
         "languages": [lang for lang in by_type.get("language", []) if lang != "translated"],
         "parodies": by_type.get("parody", []),
     }
@@ -337,7 +339,27 @@ def _parse_gallery_html(html: str, gid: str) -> dict:
         "pages": [thumbs.get(i, "jpg") for i in range(1, count + 1)],
         "paths": [""] * count,
         "artists": [], "tags": [], "languages": [], "parodies": [],
+        "all_tags": _html_tags(soup),
     }
+
+
+_HTML_TAG_FIELDS = {"tags": "tag", "artists": "artist", "groups": "group", "parodies": "parody",
+                    "characters": "character", "languages": "language", "categories": "category"}
+
+
+def _html_tags(soup) -> list[str]:
+    """Tags of the gallery page ("type:name"), when the API can't be used."""
+    found = []
+    for container in soup.select("#tags .tag-container"):
+        field = container.get_text(" ", strip=True).split(":", 1)[0].strip().lower()
+        kind = _HTML_TAG_FIELDS.get(field)
+        if not kind:
+            continue
+        for name in container.select("a .name"):
+            text = name.get_text(" ", strip=True)
+            if text:
+                found.append(f"{kind}:{text}")
+    return found
 
 
 def fetch_gallery_info(url: str, session: requests.Session | None = None) -> dict:

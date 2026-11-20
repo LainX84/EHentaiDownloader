@@ -43,6 +43,7 @@ class UrlListMixin:  # pylint: disable=too-few-public-methods,no-member
             for tag in tags:
                 if tag.endswith("_batch_line") or tag.startswith("task_"):
                     self._batch_editor.tag_add(tag, f"{line_no}.0", f"{line_no}.end")
+            self._decorate_line(self._batch_editor, line_no)
         self._editor_edit(action)
 
     def _editor_entries(self) -> list[tuple[int, str, str]]:
@@ -134,12 +135,16 @@ class UrlListMixin:  # pylint: disable=too-few-public-methods,no-member
     def _load_urls_txt(self) -> None:
         """Load URLs.txt into the batch editor."""
         self._flush_pending_removals()
+        from src.cli.downloader import normalize_line
         path = Path("URLs.txt")
         content = path.read_text(encoding="utf-8") if path.exists() else ""
+        # Lines written by older versions get the current columns
+        content = "\n".join(normalize_line(line) for line in content.splitlines())
         def action() -> None:
             self._batch_editor.delete("1.0", END)
             self._batch_editor.insert("1.0", content)
         self._editor_edit(action)
+        self._decorate_all(self._batch_editor)
         self._batch_editor.edit_modified(False)
 
     def _save_urls_txt(self, quiet: bool = False) -> None:
@@ -199,6 +204,7 @@ class UrlListMixin:  # pylint: disable=too-few-public-methods,no-member
         else:
             self._retry_list.insert("1.0", "(no failed URLs found)")
         self._retry_list.configure(state="disabled")
+        self._decorate_all(self._retry_list)
         count = len(urls)
         self._retry_count_var.set(
             f"{count} URL{'s' if count != 1 else ''} in queue"
@@ -282,9 +288,9 @@ class UrlListMixin:  # pylint: disable=too-few-public-methods,no-member
                 self._task_state[task_id] = "queued"
                 self._batch_editor.tag_add(f"task_{task_id}", f"{line_no}.0", f"{line_no}.end")
                 self._batch_editor.tag_add("queued_batch_line", f"{line_no}.0", f"{line_no}.end")
-                task = {"id": task_id, "url": url, "name": name, "dup": dup}
+                task = {"id": task_id, "url": url, "name": name, "dup": dup, "key": key}
                 lane = site_lane(url)
-                self._batch_queues[lane].put(task)
+                self._batch_queues[lane].append(task)
                 self._ensure_lane(lane)  # E-Hentai and nhentai download side by side
                 if valid and not dup and not gallery_status(url):
                     self._verify_queue.put(task)
@@ -295,7 +301,14 @@ class UrlListMixin:  # pylint: disable=too-few-public-methods,no-member
         if line_no:
             self._batch_editor.tag_remove("queued_batch_line", f"{line_no}.0", f"{line_no}.end")
             self._batch_editor.tag_add("active_batch_line", f"{line_no}.0", f"{line_no}.end")
-            self._batch_editor.see(f"{line_no}.0")
+            # Scroll only when no other gallery downloading is on screen: with two sites at
+            # once the list would otherwise jump between them
+            others_visible = any(
+                (other := self._task_line(other_id)) and self._batch_editor.bbox(f"{other}.0")
+                for other_id in self._active_tasks if other_id != task_id
+            )
+            if not others_visible:
+                self._batch_editor.see(f"{line_no}.0")
         self._active_tasks[task_id] = label
         self._batch_counter = (cur_idx, total_cnt)
         self._show_active_tasks()
@@ -421,21 +434,18 @@ class UrlListMixin:  # pylint: disable=too-few-public-methods,no-member
         log_summary = summary + (f". About {images:,} image(s) to download" if images else "")
         self._q.put(("LOG", _ts(), "Verify completed", log_summary))
         self._status_var.set(("✔ " if not bad_count else "⚠ ") + "Verify: " + summary)
-        self._offer_sort_by_size()
+        self._sort_batch_list()
 
-    def _offer_sort_by_size(self) -> None:
-        """After a verification, offer to move the galleries with fewer images to the top."""
+    def _sort_batch_list(self) -> None:
+        """Sort the list by site (E-Hentai / ExHentai, then nhentai), then size (fewer images first).
+
+        Done after Verify Links and when a batch starts: each site lane then goes down the list
+        one line after another, so the list does not jump up and down while it downloads.
+        """
         from src.cli.downloader import gallery_status, parse_url_line, sort_lines_by_size
         lines = self._batch_editor.get("1.0", "end-1c").splitlines()
         sorted_lines = sort_lines_by_size(lines)
         if sorted_lines is None:
-            return
-        if not messagebox.askyesno(
-            "Download order",
-            "Download the galleries with fewer images first?\n\n"
-            "The list will be sorted by number of images (smallest first); "
-            "links with problems go to the bottom. Comment and blank lines stay where they are.",
-        ):
             return
 
         def action() -> None:
@@ -449,5 +459,7 @@ class UrlListMixin:  # pylint: disable=too-few-public-methods,no-member
                     tag = "done_batch_line" if status == "GOOD" else "fail_batch_line"
                     self._batch_editor.tag_add(tag, f"{line_no}.0", f"{line_no}.end")
         self._editor_edit(action)
+        self._decorate_all(self._batch_editor)
         self._save_urls_txt(quiet=True)
-        self._q.put(("LOG", _ts(), "Download order", "List sorted: galleries with fewer images first."))
+        self._q.put(("LOG", _ts(), "Download order",
+                     "List sorted: E-Hentai / ExHentai first, then nhentai; in each, galleries with fewer images first."))

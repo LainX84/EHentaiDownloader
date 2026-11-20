@@ -18,9 +18,9 @@ from urllib.parse import urlparse
 
 from requests import Response, Session
 
+from src import config
 from src.config import (
     CREATE_CBZ,
-    DOWNLOAD_FOLDER,
     EHENTAI_SUBFOLDER,
     IMAGE_FETCH_RETRIES,
     IMAGE_SERVER_RETRIES,
@@ -28,7 +28,7 @@ from src.config import (
     RENAME_SEQUENTIAL,
     TEMP_FOLDER,
 )
-from src import image_formats, throttle
+from src import image_formats, stats, tags as tag_utils, throttle
 from src.crawler.crawler import Crawler
 from src.crawler.crawler_utils import extract_nl_value, get_picture_pages
 from src.file_utils import (
@@ -69,10 +69,30 @@ class AlbumDownloader(CbzArchiveMixin):
     # Sub-folder of Downloads that receives the finished albums of this site
     SITE_FOLDER = EHENTAI_SUBFOLDER
 
+    # Tags of the gallery ("namespace:name"), read from the gallery page
+    gallery_tags: list[str] = []
+    # True when the album was already complete on disk (nothing downloaded)
+    skipped_complete = False
+    # Images really downloaded by this run (0 = everything was already on disk)
+    images_downloaded = 0
+
+    @property
+    def site_root_folder(self) -> Path:
+        """Folder of the completed albums of this site: Downloads/<site>."""
+        return Path(config.DOWNLOAD_FOLDER) / self.SITE_FOLDER
+
     @property
     def site_download_folder(self) -> Path:
-        """Folder of the completed albums of this site: Downloads/<site>."""
-        return Path(DOWNLOAD_FOLDER) / self.SITE_FOLDER
+        """Where this album goes when complete: Downloads/<site>, or Downloads/<site>/<favorite tag>
+        with Settings → "Sort downloads into folders by favorite tag"."""
+        folder = tag_utils.folder_for(self.gallery_tags)
+        name = sanitize_directory_name(folder) if folder else ""
+        return self.site_root_folder / name if name else self.site_root_folder
+
+    @property
+    def stats_site(self) -> str:
+        """Site of the statistics: e-hentai, exhentai or nhentai (the domain really used)."""
+        return stats.site_of_url(self.url)
 
     def __init__(
         self,
@@ -112,6 +132,8 @@ class AlbumDownloader(CbzArchiveMixin):
         self.album_name = self.crawler.get_album_name()
         self.clean_album_name = self.crawler.get_clean_album_name()
         self.total_images = self.crawler.get_total_images()
+        self.gallery_tags = tag_utils.from_ehentai_soup(self.initial_soup)
+        self.live_manager.stats_site = self.stats_site  # bytes counted by fetch_with_retries
 
         # Tell the user which gallery this is and which site it is really downloaded from
         requested_domain = urlparse(url).netloc.lower()
@@ -137,7 +159,9 @@ class AlbumDownloader(CbzArchiveMixin):
         # A partial download is resumed from wherever it already is: first the temp folder,
         # then Downloads/<site> and Downloads (albums started by older versions are finished in place).
         self.download_path = ""
-        for base in (TEMP_FOLDER, self.site_download_folder, DOWNLOAD_FOLDER):
+        bases = dict.fromkeys((TEMP_FOLDER, self.site_download_folder, self.site_root_folder,
+                               Path(config.DOWNLOAD_FOLDER)))
+        for base in bases:
             for name in (self.clean_album_name, self.album_name):
                 candidate = Path(base) / sanitize_directory_name(name)
                 if candidate.is_dir() and any(candidate.iterdir()):
@@ -403,12 +427,31 @@ class AlbumDownloader(CbzArchiveMixin):
         """
         if self._skip_if_archived():
             return []
-        return self._complete_album(self._download_pages())
+        outages = throttle.network_outages()
+        failed = self._download_pages()
+        if throttle.network_outages() != outages:
+            # The connection was lost while this gallery was downloading: go through it once
+            # more (pages already on disk are skipped), so no image is lost because of it.
+            self.live_manager.update_log(
+                "Connection check",
+                f"The internet connection was lost during \"{self.clean_album_name}\": checking the gallery "
+                "again for missing images...",
+            )
+            with self._processed_images_lock:
+                self._processed_images_count = 0  # the progress bar starts again for this pass
+            failed = self._download_pages()
+            self.live_manager.update_log(
+                "Connection check",
+                "Gallery checked again: " + (f"{len(failed)} image(s) still missing (they go to Retry Failed)."
+                                             if failed else "no image missing."),
+            )
+        return self._complete_album(failed)
 
     def _skip_if_archived(self) -> bool:
         """True (and progress shown as complete) when the album is already a complete CBZ."""
         existing_cbz = self._find_complete_cbz()
         if existing_cbz is not None:
+            self.skipped_complete = True
             if hasattr(self.live_manager, "start_album"):
                 self.live_manager.start_album(
                     album_title=self.clean_album_name or self.album_name,
@@ -894,6 +937,8 @@ class AlbumDownloader(CbzArchiveMixin):
             )
             if hasattr(self.live_manager, "count_downloaded_image"):  # GUI session counter
                 self.live_manager.count_downloaded_image()
+            stats.add_image(self.stats_site)
+            self.images_downloaded += 1
             _mark_done()
 
             # Polite sleep between tasks in each thread

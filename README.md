@@ -4,18 +4,28 @@
 
 > A Python tool to download E-Hentai, ExHentai and nhentai galleries, with a simple desktop GUI, a command-line interface and a [Docker version with a web interface](docker/README.md).
 
-![Demo](assets/demo.gif)
+<p align="center">
+  <img src="assets/screenshots/batch.png" alt="Batch Download tab: the queue in columns, with site logo, favorite tag, pages and title" width="49%">
+  <img src="assets/screenshots/statistics.png" alt="Statistics tab: totals and session per site, speeds and most downloaded tags" width="49%">
+</p>
+<p align="center">
+  <img src="assets/screenshots/single.png" alt="Single Download tab" width="49%">
+  <img src="assets/screenshots/favorite_tags.png" alt="Settings → Favorite tags window" width="49%">
+</p>
 
 > This project is a fork of [Lysagxra/EHentaiDownloader](https://github.com/Lysagxra/EHentaiDownloader), extended with a GUI, image format conversion, sequential renaming, smarter retries and more. It is distributed under the same license (GPL-3.0).
 
 ---
 
-## What's new in 2.0.4
+## What's new in 2.1.0
 
-- **New Image Format list** (desktop, Docker / web and CLI): *Native (Original)*, **WEBP (new default)**, *JPEG*, *JPEG XL*, *PNG*, *AVIF*. *AUTO* has been removed.
-- **WEBP and AVIF keep animations**; choosing JPEG, JPEG XL or PNG warns that animated images keep only their first frame, and AVIF / JPEG XL explain which codecs are needed on Windows, Linux and macOS. All the formats are open standards and royalty-free.
-- **Clickable links in the log** (desktop and web).
-- Docker / web: the *Open Downloads* button, which the web version is not meant to have, has been removed.
+- 📊 **Statistics tab** (desktop and web): galleries, images, size and speed since the first start and for this session, split by E-Hentai / ExHentai / nhentai, plus the **most downloaded tags**.
+- 🏷️ **Favorite tags** (*Settings → Favorite tags…*): they stand out in the lists, and with *Sort downloads into folders by favorite tag* galleries go into `<site>/<tag>/` (e.g. `E-Hentai/Netorare/`).
+- ↕️ **Queue order**: lines not started yet can be moved (▲ ▼, Alt+Up / Alt+Down, drag and drop on the web page) or removed (✖) while the batch runs.
+- 👀 **Clearer lists, in columns**: `✅ | [site logo] | [ NETORARE ] | 123 | Gallery title` (site, favorite tag in its own colour, pages, title), with the link hidden (still kept for downloads, Retry and the log).
+- 📁 **Download folder** of your choice on the desktop (*Settings → Download folder…*).
+- 🔽 **Minimize to the system tray** (desktop, Windows and Linux): the window hides next to the clock and the downloads go on in the background; closing the window during a download offers the same.
+- 📡 **Internet connection lost**: downloads wait for it to come back instead of failing, and no image is lost.
 
 All changes, also of earlier versions: [CHANGELOG.md](CHANGELOG.md).
 
@@ -25,11 +35,14 @@ All changes, also of earlier versions: [CHANGELOG.md](CHANGELOG.md).
 
 - 🌐 **Three sites**: E-Hentai, ExHentai and **nhentai.net** (`https://nhentai.net/g/<number>/`). Paste the link as usual: the site is recognised automatically and the album is saved the same way (same formats, renaming, CBZ).
 - 🎨 **Light, dark or automatic theme** (follows the Windows / macOS / Linux setting), from **Settings → Theme**.
-- 🧭 **Menu bar**: *File* (folders, log, account cookies), *Settings* (Auto Rename, CBZ, Speed, When done, Theme), *Help* (GitHub, report a problem, disclaimer, license, about).
+- 🧭 **Menu bar**: *File* (folders, log, account cookies), *Settings* (Auto Rename, CBZ, download folder, favorite tags, Speed, When done, Theme), *Help* (GitHub, report a problem, disclaimer, license, about).
 - 🐳 **Docker version** with a web interface for a home server ([docker/README.md](docker/README.md)).
 - 🖥️ **Desktop GUI** (Tkinter): single, batch and retry modes, live progress bars and a coloured log. Start it by double-clicking `EHentaiDownloader.pyw`.
+- 🔽 **Background downloads in the system tray** (Windows, Linux): minimize the window and it goes to the tray icon (next to the clock), with *Show*, *Pause / Resume*, *Open Downloads* and *Quit*; the tooltip shows what is downloading and a notification says when the downloads are finished (**Settings → Minimize to system tray**, ON by default). On macOS the window is minimized to the Dock as usual (downloads go on there too).
 - 📥 **Quick link input**: paste text with links (Ctrl+V in the batch list), drag links or text files onto the window, or let the clipboard watcher collect every gallery link you copy.
-- 🗂️ **One folder per site**: `Downloads/E-Hentai/<title>` and `Downloads/nhentai/<title>` (or `.cbz`). Albums and archives made by older versions directly in `Downloads/` are still recognised.
+- 🗂️ **One folder per site**: `Downloads/E-Hentai/<title>` and `Downloads/nhentai/<title>` (or `.cbz`). Albums and archives made by older versions directly in `Downloads/` are still recognised. The `Downloads` folder itself can be anywhere (**Settings → Download folder…**).
+- 🏷️ **Favorite tags**: the tags of each gallery are read from the site and collected in a list where you tick your favorites (**Settings → Favorite tags…**); they stand out in the lists and, if you want, decide the sub-folder: `Downloads/E-Hentai/Netorare/<title>`.
+- 📊 **Statistics**: galleries, images, size, time and speed (average, peak, now) since the first start and for this session, per site, and the most downloaded tags.
 - 🖼️ **Image format conversion**
   - **Native (Original)**: each image is saved exactly as the server sends it, without any change.
   - **WEBP** (default), **JPEG**, **JPEG XL**, **PNG**, **AVIF**: every image is converted to that format. WEBP and AVIF keep animations; with the others animated images keep only their first frame (you are warned when you choose them).
@@ -44,11 +57,12 @@ All changes, also of earlier versions: [CHANGELOG.md](CHANGELOG.md).
   - The 509 "image quota exceeded" placeholder is detected: it is never saved as a page, and the album is queued for retry.
 - ⚡ **Parallel downloads** with an adjustable **speed** (**Settings → Speed**, 1x Very slow … 5x Very fast): it sets the pause between page requests, shared by all threads of the same site, and how many images download at once. One page request per image (the "reload" link is used only when an image server fails).
 - ⏸ **IP-ban pause**: when E-Hentai answers *"This IP address has been temporarily banned … The ban expires in X minutes and Y seconds"*, the ban time is read from the page and every download pauses for that long plus 30–45 s, then resumes the same album (it never skips to the next one). When nhentai answers *Too Many Requests* (HTTP 429) the same pause is used, for the time asked by the site plus a random 10–15 s. The status bar shows a warning with a countdown; after switching IP (e.g. with a VPN) press **Resume now**.
+- 📡 **Internet connection lost**: when a request fails and no site at all can be reached, every download waits (checked every 10 s) instead of failing, and goes on by itself when the connection is back. The gallery that was downloading is then gone through once more (pages already on disk are skipped) so no image is lost; a gallery whose page could not be read during the outage is tried again.
 - ♻️ **Resume**: images already on disk (also from earlier runs or renamed files) are skipped. Every image is first written to a `.part` temp file and renamed only when complete, so an interrupted run can never leave a truncated image that looks finished (leftover `.part` files are deleted on the next run).
 - 📋 **Batch mode** from `URLs.txt` and 🔄 **retry queue** in `failed_downloads.txt`.
 - 🔍 **Link check before downloading**: malformed links (e.g. a token missing a character) are reported before starting; *Verify Links* also checks every gallery online and shows its title, size and the site it will be downloaded from (e-hentai.org, exhentai.org or nhentai.net).
 - 🧹 **Duplicate cleanup**: links pointing to the same gallery are detected (by gallery id, even with a different domain or a broken token) and removed after confirmation, keeping the valid link.
-- 🏷️ **Clear lists**: after verification each line shows `GOOD/BAD | images | title | link`, and every error and failure summary names the gallery, not just its link.
+- 🏷️ **Clear lists**: after verification each line shows `✅/❌ [site logo] | FAVORITE TAG | title` (the link stays hidden), and every error and failure summary names the gallery, not just its link. Lines not started yet can be moved or removed while the batch runs.
 - 🗂️ **Log rotation**: `session.log` rotates automatically (`session.log.1` … `session.log.3`).
 
 ---
@@ -64,7 +78,7 @@ Ready-to-use versions are attached to every [release](https://github.com/LainX84
 | **macOS** Intel | `EHentaiDownloader-<version>-macos-x64.zip` | As above. |
 | **Linux** x64 | `EHentaiDownloader-<version>-linux-x64.tar.gz` | `tar xzf EHentaiDownloader-*-linux-x64.tar.gz`, then run `EHentaiDownloader/EHentaiDownloader`. |
 
-Where the app keeps its files (`Downloads/`, `temp/`, `URLs.txt`, `cookies.json`, `settings.json`, `session.log`):
+Where the app keeps its files (`Downloads/`, `temp/`, `URLs.txt`, `cookies.json`, `settings.json`, `stats.json`, `session.log`):
 
 - **Windows / Linux**: in the folder of the executable ("portable": move the folder and everything moves with it). If that folder can't be written (e.g. *Program Files*), `EHentaiDownloader` in your home folder is used.
 - **macOS**: `~/EHentaiDownloader` (in your home folder).
@@ -76,7 +90,7 @@ Where the app keeps its files (`Downloads/`, `temp/`, `URLs.txt`, `cookies.json`
 ## Requirements (to run from the source code)
 
 - **Python 3.10+** (with Tkinter, included in the official Windows/macOS installers; on Linux install it with the system package, e.g. `sudo apt install python3-tk` on Debian/Ubuntu, `sudo dnf install python3-tkinter` on Fedora)
-- Python packages: `beautifulsoup4`, `requests`, `rich`, `Pillow` (11.3 or later, for AVIF), `pillow-jxl-plugin` (JPEG XL), and `tkinterdnd2` for drag and drop (optional: without it everything else works)
+- Python packages: `beautifulsoup4`, `requests`, `rich`, `Pillow` (11.3 or later, for AVIF), `pillow-jxl-plugin` (JPEG XL), `tkinterdnd2` for drag and drop and `pystray` for the system tray icon (both optional: without them everything else works; on Linux the tray needs a desktop with a system tray / AppIndicator area, e.g. GNOME with the *AppIndicator* extension, KDE, Xfce, Cinnamon)
 - *(Optional)* [ImageMagick](https://imagemagick.org/script/download.php) in the system `PATH` for faster conversions
 
 ---
@@ -146,7 +160,11 @@ python EHentaiDownloader.pyw
 | **Settings → Auto Rename** | ON/OFF: rename images `01…N` when an album is complete. |
 | **Settings → CBZ archive** | ON/OFF: save each completed album as `Downloads/<site>/<gallery title>.cbz` instead of a folder of images. |
 | **Settings → ComicInfo.xml in CBZ** | ON/OFF (default OFF): also put a `ComicInfo.xml` (title, page count, source link) inside each new CBZ, for readers that use it. |
+| **Settings → Download folder…** | Where the finished albums go (default: `Downloads` next to `URLs.txt`); `E-Hentai/` and `nhentai/` are made inside it. *Use the default download folder* goes back to `Downloads`. Albums still downloading stay in `temp/`. |
+| **Settings → Favorite tags…** | List of the tags met in your galleries, with a selector (☐ / ★) next to each one: tick the ones to highlight. The list **fills up as you verify or download galleries** (their tags are saved in `tags.json`, with how many galleries had them); before the first downloads it offers only a few common tags ("suggested"), and you can add any tag by hand (also `artist:name`). Each favorite has a label (shown in capitals, at most 20 characters, also the folder name), **its own colour** (*Colour…*) and a priority (▲ ▼): when a gallery has more than one favorite, the highest wins. The tags of every gallery are remembered, so the lists follow a new priority also after a restart. A favorite matches the tag on every site; `female:big breasts` matches that namespace only. |
+| **Settings → Sort downloads into folders by favorite tag** | ON/OFF (default OFF): a gallery with a favorite tag goes into `Downloads/<site>/<label>/<title>`, the others stay in `Downloads/<site>/`. |
 | **Settings → Watch clipboard for links** | ON/OFF (default OFF): every gallery link you copy (also several at once, inside any text) is added to the batch list, skipping galleries already listed. Links copied before you turn it on are ignored. |
+| **Settings → Minimize to system tray** | ON/OFF (default ON; Windows and Linux): minimizing the window hides it in the system tray (next to the clock) and the downloads go on in the background. Click the tray icon (or *Show EHentai Downloader* in its menu) to bring the window back; the menu also has *Pause / Resume downloads*, *Open Downloads* and *Quit*. The tooltip shows what is downloading, and a notification says when the downloads are finished. Closing the window while a download runs asks: *Yes* keeps downloading in the tray, *No* stops and closes. Greyed out on macOS (the window goes to the Dock as usual) or when `pystray` / a system tray is missing. |
 | **Settings → Speed** | 1x Very slow … 5x Very fast (default 3x Normal), also shown bottom right (click it to change). Lower it if you get temporary IP bans. The request pace changes at once, the number of parallel downloads from the next album. |
 | **Settings → Theme** | *Automatic (system)*, *Light* or *Dark*; the window changes at once. *Automatic* follows the system setting (checked every minute). |
 | **Help** menu | GitHub page, *Report a problem* (GitHub issues), *Check for updates now*, *Check for updates at start-up* (ON by default, at most once a day: one request to the GitHub API, nothing is downloaded or installed), *Disclaimer*, *License* (GPL-3.0 and third-party software), *About*. |
@@ -154,13 +172,15 @@ python EHentaiDownloader.pyw
 | **Pause / Resume** | Next to *Start Batch*, active while a download runs: no new request starts (images already being received finish), freeing the bandwidth. On pause `URLs.txt` is saved and the album in progress stays in `temp/`, so you can also close the program (no confirmation asked) or shut down the PC: the next *Start Batch* resumes from that album, skipping the pages already on disk. |
 | **When done** | Bottom right, and in **Settings → When done**: *Do nothing*, *Close program* or *Shut down PC* when all downloads are finished (handy for a list left running overnight). A 60 s countdown lets you cancel; the list and settings are saved first. You can change it while a download runs. It always starts as *Do nothing* (never remembered, so the PC is not switched off by surprise next time). |
 | **Resume now** | Appears in the status bar during a temporary IP ban: stop waiting after you changed IP (VPN). If the ban is still active the pause simply starts again. |
-| *Remembered settings* | Image Format, Auto Rename, CBZ archive, ComicInfo.xml, clipboard watcher, update check, Speed, Theme and the start-up notice choice are saved in `settings.json` as soon as you change them and restored at the next start (delete the file to go back to the `src/config.py` defaults). |
+| *Remembered settings* | Image Format, Auto Rename, CBZ archive, ComicInfo.xml, download folder, favorite tags, folders by tag, clipboard watcher, system tray, update check, Speed, Theme and the start-up notice choice are saved in `settings.json` as soon as you change them and restored at the next start (delete the file to go back to the `src/config.py` defaults). |
 | **Open Downloads** | Button on the right of the tab bar (always visible, also in *File*): opens the `Downloads` folder (with the `E-Hentai` and `nhentai` sub-folders). |
 | **Single Download** tab | Paste one gallery URL and press *Start Download*. If *Paste* finds several links in the clipboard, it offers to add all of them to the batch list. |
 | **Batch Download** tab | Editor for `URLs.txt`: one URL per line, lines starting with `#` are skipped. **Ctrl+V** keeps only the gallery links of the copied text (a whole web page or message is fine) and adds those not already listed; you can also **drag** links, text or `.txt` files onto the window. *Start Batch* first checks for duplicates and malformed links. The list is saved automatically every few seconds; while the batch runs you can keep adding links at the bottom and they are queued too. Links never verified are checked online in parallel with the download (unreadable ones are skipped and go to *Retry Failed*). **E-Hentai / ExHentai and nhentai links download side by side**: they are different servers with their own limits, so the batch keeps one gallery of each site going at the same time (galleries of the same site still go one after another). *Retry Failed* works the same way. Downloaded lines turn green and disappear after ~45 s; *Clear All* asks for confirmation. |
+| **▲ ▼ ✖** (right of the list) | Move up / down or remove the line with the cursor (also **Alt+Up**, **Alt+Down**, **Ctrl+Delete**). Lines not started yet can be moved and removed also while the batch runs: each site downloads its galleries in the order of the list, removed lines are skipped. A gallery already downloading can't be moved or removed. |
 | **Duplicates** button | Finds links to the same gallery and, after confirmation, keeps one link per gallery. |
-| **Verify Links** button | Checks every link online without downloading: title, number of images and source site (e-hentai.org / exhentai.org). Rewrites each line as `GOOD/BAD | images | title | link`, then offers to sort the list so galleries with fewer images are downloaded first (links with problems go to the bottom). |
+| **Verify Links** button | Checks every link online without downloading: title, number of images, tags and source site (e-hentai.org / exhentai.org / nhentai.net). Rewrites each line (see [Link lists format](#link-lists-format)), then **sorts the list**: E-Hentai / ExHentai galleries first, then nhentai, and in each group the galleries with fewer images first (links with problems at the bottom of their group). The list is sorted the same way when *Start Batch* is pressed: each site then goes down the list line by line, so the list does not jump up and down while it downloads. Lines moved by hand while the batch runs keep their place. |
 | **Retry Failed** tab | Albums from `failed_downloads.txt`, in the same column format; press *Retry Failed* to try them again. |
+| **Statistics** tab | Since the first start (`stats.json`) and this session: galleries · images, size and time downloading, average and peak speed, the same per site (E-Hentai, ExHentai, nhentai), and the most downloaded tags. *Reset* starts again from zero. The speed right now is also in the status bar. |
 | **Log** | Live events; *Open Log File* opens `session.log`. |
 
 ### 2. Command line (optional, legacy)
@@ -197,18 +217,25 @@ from any browser of the house. How to install and use it:
 In the batch editor (and `URLs.txt`) just paste **one link per line**. After **Verify Links**, or once a gallery has been downloaded, each line is rewritten as columns:
 
 ```text
-GOOD |   35 | [MeowWithMe] To Love Ru: Double Trouble | https://e-hentai.org/g/1908257/7261eadc3e/
-BAD  |    - | (invalid link) | https://exhentai.org/g/4077626/00cb5bea6/
+✅ EHENTAI  |               |  35 | [MeowWithMe] To Love Ru: Double Trouble | https://e-hentai.org/g/1908257/7261eadc3e/
+✅ NHENTAI  |   NETORARE    | 123 | [Spiral] Musume no Tomodachi… | https://nhentai.net/g/694850/
+❌ EXHENTAI |               |   - | https://exhentai.org/g/4077626/00cb5bea6/ — invalid link | https://exhentai.org/g/4077626/00cb5bea6/
 ```
+
+In the window the same lines read `✅ [logo] | [ NETORARE ] | 123 | [Spiral] Musume no Tomodachi…`, aligned in columns: the site name becomes its logo, the favorite tag is a label in its own colour (blank when the gallery has none) and the link is hidden (it is still in the line).
 
 | Column | Meaning |
 | :--- | :--- |
-| `GOOD` / `BAD` | Whether the gallery page could be read with this link |
-| `35` | Number of images in the gallery (`-` when unknown) |
-| Title | Gallery title; for `BAD` lines, a short reason in brackets |
+| `✅` / `❌` | Whether the gallery page could be read with this link |
+| Site | `EHENTAI`, `EXHENTAI` or `NHENTAI` (shown as a logo) |
+| Tag | The [favorite tag](#1-gui-recommended) of the gallery with the highest priority (blank if none); the column is as wide as the longest favorite label |
+| `123` | Number of images (pages) of the gallery (`-` when unknown) |
+| Title | Gallery title; for `❌` lines the link followed by a short reason |
 | Link | The gallery URL (always the last column) |
 
-The same format is used in the *Retry Failed* list and in `failed_downloads.txt`. Lines starting with `#` are ignored; bare links and the older `URL  # title` form are still accepted.
+The same format is used in the *Retry Failed* list and in `failed_downloads.txt`. Lines starting with `#` are ignored; bare links and the older `GOOD | 35 | title | link` and `URL  # title` forms are still accepted (table lines are rewritten in the current form).
+
+The site logos are original badges in `assets/sites/`. To use other images, put `ehentai.png`, `exhentai.png` and `nhentai.png` (4:1, e.g. 160×40) in a `logos/` folder next to `URLs.txt` (Docker: `/config/logos/`).
 
 A gallery link always ends with a **10-character token** (`/g/<number>/<token>/`). If a character is lost while copying, the site answers *"Key missing, or incorrect key provided"*: the program now detects this before downloading.
 
@@ -255,8 +282,8 @@ The archive for your system is written to `release/` (PyInstaller can only build
 **Publishing a release** (maintainers): set `APP_VERSION` in `src/config.py`, add a section to `CHANGELOG.md`, commit, then push a tag with the same version:
 
 ```bash
-git tag v2.0.4
-git push origin v2.0.4
+git tag v2.1.0
+git push origin v2.1.0
 ```
 
 The GitHub workflow `.github/workflows/release.yml` builds Windows, macOS (Apple Silicon and Intel) and Linux on GitHub's servers and attaches the four archives to a new release with generated notes. *Actions → Build release → Run workflow* makes a test build without publishing (the archives can be downloaded from the run page).
@@ -269,7 +296,9 @@ All settings are in [`src/config.py`](src/config.py):
 
 | Setting | Default | Meaning |
 | :--- | :--- | :--- |
-| `DOWNLOAD_FOLDER` | `Downloads` | Where albums are saved (one sub-folder per album). |
+| `DOWNLOAD_FOLDER` | `Downloads` | Where albums are saved (one sub-folder per album). The GUI can change it from **Settings → Download folder…** (saved in `settings.json`). |
+| `STATS_FILE` | `stats.json` | Statistics since the first start (Statistics tab). |
+| `TAGS_FILE` | `tags.json` | Tags met in the verified / downloaded galleries (list of **Settings → Favorite tags…**). |
 | `TEMP_FOLDER` | `temp` | Albums are downloaded here and moved to `DOWNLOAD_FOLDER` only when complete (incomplete ones stay here and are resumed by *Retry Failed*). |
 | `AUTOSAVE_INTERVAL` | `10` | Seconds between automatic saves of the batch list to `URLs.txt`. |
 | `DONE_LINE_REMOVE_DELAY` | `45` | Seconds a downloaded (green) line stays in the batch list before being removed. |
@@ -344,7 +373,7 @@ EHentaiDownloader/
 ├── tools/make_icons.py      # Makes logo / icons (assets/) from assets/logo_source.jpg
 ├── requirements.txt
 ├── CHANGELOG.md             # What changed in every version
-├── assets/                  # README images, logo and app icons ("EHD" letters at 16–32 px)
+├── assets/                  # Logo and app icons ("EHD" letters at 16–32 px), sites/ (site logos), screenshots/ (README)
 └── src/
     ├── cli/
     │   ├── downloader.py    # CLI: single gallery + download logic shared with the GUI
@@ -356,6 +385,8 @@ EHentaiDownloader/
     ├── image_formats.py     # Image Format choices, default (WebP) and their notices
     ├── nhentai.py           # nhentai: link check, gallery data (API v2 / page), image servers
     ├── throttle.py          # Speed levels (request pacing) and temporary IP-ban / rate-limit pause
+    ├── tags.py              # Gallery tags (E-Hentai page / nhentai data), favorite tags, tag folders
+    ├── stats.py             # Download statistics (stats.json), speeds
     ├── paths.py             # Data folder and bundled files (source code or packaged app)
     ├── ui_theme.py          # Light / dark / automatic theme, platform fonts
     ├── gui_dialogs.py       # Start-up notice, Account & cookies, License, About windows
@@ -365,9 +396,12 @@ EHentaiDownloader/
     │   ├── app.py           # Main window (EHentaiGUI), assembled from the modules below
     │   ├── layout.py        # Styles, menu bar, theme, tabs, progress bars, log
     │   ├── url_list.py      # Batch list editor, retry list, duplicates, estimates
+    │   ├── queue_view.py    # Look of the list lines (logos, tag labels), ▲ ▼ ✖ queue order
+    │   ├── stats_tab.py     # Statistics tab and speed in the status bar
     │   ├── link_intake.py   # Paste many links, drag and drop, clipboard watcher
     │   ├── workers.py       # Background download / link-check threads
     │   ├── when_done.py     # End-of-download summary, close / shut down, exit
+    │   ├── tray.py          # System tray icon: minimize to tray, background downloads
     │   ├── updates.py       # Update check (Help menu)
     │   ├── live_manager.py  # Progress / log messages from the threads to the window
     │   └── style.py         # Colours, fonts, small widget helpers
@@ -383,7 +417,7 @@ EHentaiDownloader/
     └── managers/            # Rich terminal display used by the CLI
 ```
 
-Files created at runtime (and ignored by git): `Downloads/`, `temp/`, `URLs.txt`, `failed_downloads.txt`, `session.log*`, `cookies.json`.
+Files created at runtime (and ignored by git): `Downloads/`, `temp/`, `URLs.txt`, `failed_downloads.txt`, `session.log*`, `cookies.json`, `settings.json`, `stats.json`, `tags.json`, `logos/`.
 
 ---
 

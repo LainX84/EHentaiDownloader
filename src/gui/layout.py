@@ -23,6 +23,7 @@ from src import gui_dialogs, image_formats, paths, throttle, ui_theme
 from src.config import ISSUES_URL, PROJECT_URL
 
 from src.gui import style
+from src.gui.tray import tray_supported
 from src.gui.style import (
     DIALOG_FONTS, FONT_BTN, FONT_HEAD, FONT_MONO, FONT_MONO_BOLD, FONT_SMALL, FONT_TITLE,
     FONT_UI, PAD, TAB_WIDTH, WHEN_DONE_NOTHING, WHEN_DONE_OPTIONS, btn as _btn,
@@ -200,9 +201,28 @@ class LayoutMixin:  # pylint: disable=too-few-public-methods,no-member
         settings.add_checkbutton(label="ComicInfo.xml in CBZ", variable=self._comic_info_var_init(),
                                  command=self._on_comic_info_changed)
         settings.add_separator()
+        # Entries locked while a download runs (read when an album is completed)
+        self._locked_menu_entries = [0, 1, 2]
+        settings.add_command(label="Download folder…", command=self._choose_download_folder)
+        self._locked_menu_entries.append(settings.index("end"))
+        settings.add_command(label="Use the default download folder", command=self._reset_download_folder)
+        self._locked_menu_entries.append(settings.index("end"))
+        settings.add_separator()
+        settings.add_command(label="Favorite tags…", command=self._open_favorite_tags)
+        self._locked_menu_entries.append(settings.index("end"))
+        self._tag_folders_var = BooleanVar(value=bool(self._settings.get("tag_folders", False)))
+        settings.add_checkbutton(label="Sort downloads into folders by favorite tag",
+                                 variable=self._tag_folders_var, command=self._on_tag_folders_changed)
+        self._locked_menu_entries.append(settings.index("end"))
+        settings.add_separator()
         self._watch_clipboard_var = BooleanVar(value=bool(self._settings.get("watch_clipboard", False)))
         settings.add_checkbutton(label="Watch clipboard for links", variable=self._watch_clipboard_var,
                                  command=self._on_watch_clipboard_changed)
+        self._minimize_to_tray_var = BooleanVar(value=bool(self._settings.get("minimize_to_tray", True)))
+        settings.add_checkbutton(label="Minimize to system tray", variable=self._minimize_to_tray_var,
+                                 command=self._on_minimize_to_tray_changed)
+        if not tray_supported():
+            settings.entryconfigure(settings.index("end"), state="disabled")
         settings.add_separator()
 
         self._speed_var = tk.IntVar(value=throttle.get_speed())
@@ -283,9 +303,13 @@ class LayoutMixin:  # pylint: disable=too-few-public-methods,no-member
         return self._comic_info_var
 
     def _set_menu_options_state(self, state: str) -> None:
-        """Lock Auto Rename / CBZ archive / ComicInfo while a download runs (read during it)."""
-        for index in (0, 1, 2):
+        """Lock Auto Rename / CBZ / ComicInfo / folders / tags while a download runs (read during it)."""
+        for index in getattr(self, "_locked_menu_entries", (0, 1, 2)):
             self._settings_menu.entryconfigure(index, state=state)
+        if state == "normal":
+            self._settings_menu.entryconfigure(
+                "Use the default download folder",
+                state="normal" if self._settings.get("download_folder") else "disabled")
 
     def _palette(self) -> dict:
         """Colours of the theme in use."""
@@ -313,6 +337,9 @@ class LayoutMixin:  # pylint: disable=too-few-public-methods,no-member
                 except tk.TclError:
                     pass
         self._refresh_speed_label()
+        if old != theme and hasattr(self, "_retry_list"):
+            self._decorate_all(self._batch_editor)  # favorite-tag pills in the new colours
+            self._decorate_all(self._retry_list)
         ui_theme.set_windows_title_bar(self, theme == ui_theme.THEME_DARK)
 
     def _on_theme_changed(self) -> None:
@@ -397,6 +424,11 @@ class LayoutMixin:  # pylint: disable=too-few-public-methods,no-member
         self._speed_lbl.bind("<Button-1>", lambda e: self._speed_menu.tk_popup(e.x_root, e.y_root))
         self._speed_box = self._speed_lbl
 
+        # Download speed right now (empty when idle)
+        self._speed_now_var = StringVar(value="")
+        tk.Label(sb, textvariable=self._speed_now_var, bg=style.BG, fg=style.ACCENT,
+                 font=FONT_SMALL, anchor="e").pack(side="right", padx=(PAD, 0))
+
         # Images downloaded since the program was opened (resets at every start)
         self._session_var = StringVar()
         tk.Label(sb, textvariable=self._session_var, bg=style.BG, fg=style.TEXT_SEC,
@@ -429,10 +461,12 @@ class LayoutMixin:  # pylint: disable=too-few-public-methods,no-member
         self._tab_single = ttk.Frame(self._nb, style="TFrame")
         self._tab_batch  = ttk.Frame(self._nb, style="TFrame")
         self._tab_retry  = ttk.Frame(self._nb, style="TFrame")
+        self._tab_stats  = ttk.Frame(self._nb, style="TFrame")
 
         self._nb.add(self._tab_single, text="🔗  Single Download")
         self._nb.add(self._tab_batch,  text="📋  Batch Download")
         self._nb.add(self._tab_retry,  text="🔄  Retry Failed")
+        self._nb.add(self._tab_stats,  text="📊  Statistics")
 
         # "Open Downloads" sits on the tab-bar row, right-aligned: always visible, whatever tab is open
         self._open_downloads_btn = tk.Button(
@@ -447,6 +481,9 @@ class LayoutMixin:  # pylint: disable=too-few-public-methods,no-member
         self._build_single_tab()
         self._build_batch_tab()
         self._build_retry_tab()
+        self._build_stats_tab()
+        self._nb.bind("<<NotebookTabChanged>>", lambda _e: self._refresh_stats()
+                      if self._nb.select() == str(self._tab_stats) else None)
 
     def _build_single_tab(self) -> None:
         """Build the 'Single Download' tab: one URL field plus Paste / Start buttons."""
@@ -510,7 +547,7 @@ class LayoutMixin:  # pylint: disable=too-few-public-methods,no-member
         ttk.Label(card,
                   text="One URL per line, saved automatically. Paste or drag any text with links: "
                        "only gallery links are kept.\nYou can keep adding links while the batch runs; "
-                       "downloaded lines disappear after a while.",
+                       "▲ ▼ ✖ move or remove the line with the cursor (if it has not started yet).",
                   justify="left",
                   style="Sub.TLabel").grid(
                       row=1, column=0, columnspan=2,
@@ -538,6 +575,8 @@ class LayoutMixin:  # pylint: disable=too-few-public-methods,no-member
                              command=self._batch_editor.yview)
         vsb.grid(row=0, column=1, sticky="ns")
         self._batch_editor.configure(yscrollcommand=vsb.set)
+        self._build_queue_buttons(editor_frame)
+        self._setup_line_tags(self._batch_editor)
 
         self._load_urls_txt()
         self._batch_editor.tag_configure(
@@ -562,6 +601,8 @@ class LayoutMixin:  # pylint: disable=too-few-public-methods,no-member
         # Later states must win over "queued" when both are on a line
         for tag in ("active_batch_line", "done_batch_line", "fail_batch_line"):
             self._batch_editor.tag_raise(tag, "queued_batch_line")
+        for tag in ("deco_ok", "deco_ko", "deco_badge"):  # they stand out on every line colour
+            self._batch_editor.tag_raise(tag)
 
         # Estimate of the images still to download (exact once the links are verified)
         self._estimate_var = StringVar(value="")
@@ -641,6 +682,7 @@ class LayoutMixin:  # pylint: disable=too-few-public-methods,no-member
                               command=self._retry_list.yview)
         vsb2.grid(row=0, column=1, sticky="ns")
         self._retry_list.configure(yscrollcommand=vsb2.set)
+        self._setup_line_tags(self._retry_list)
 
         self._retry_list.tag_configure(
             "active_batch_line",
@@ -657,6 +699,8 @@ class LayoutMixin:  # pylint: disable=too-few-public-methods,no-member
             background=style.LINE_FAIL_BG,
             foreground=style.LINE_FAIL_FG,
         )
+        for tag in ("deco_ok", "deco_ko", "deco_badge"):
+            self._retry_list.tag_raise(tag)
 
         # Counter label
         self._retry_count_var = StringVar(value="")

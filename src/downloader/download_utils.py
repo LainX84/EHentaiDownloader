@@ -11,9 +11,10 @@ import time
 from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
+from requests.exceptions import ConnectionError as RequestsConnectionError
 from requests.exceptions import ConnectTimeout, HTTPError, RequestException, Timeout
 
-from src import throttle
+from src import stats, throttle
 from src.config import (
     CHUNK_SIZE,
     CONNECTION_TIMEOUT,
@@ -56,7 +57,8 @@ def _fetch_with_retries_single(
     page_idx: int = 0,
 ) -> Response | None:
     """Perform single-domain retries with exponential backoff and chunk streaming."""
-    for attempt in range(retries):
+    attempt = 0
+    while attempt < retries:
         throttle.wait_while_paused()  # user pressed Pause: don't start new image requests
         try:
             response = session.get(url, timeout=CONNECTION_TIMEOUT, headers=headers, stream=True)
@@ -69,6 +71,7 @@ def _fetch_with_retries_single(
                 if chunk:
                     chunks.append(chunk)
                     downloaded += len(chunk)
+                    stats.add_bytes(getattr(live_manager, "stats_site", "e-hentai"), len(chunk))
                     if hasattr(live_manager, "update_page_stream"):
                         live_manager.update_page_stream(page_idx, downloaded, total_bytes)
 
@@ -89,6 +92,7 @@ def _fetch_with_retries_single(
                     f"Request limit hit ({status_code}). Waiting {RATE_LIMIT_SLEEPING_TIME}s...",
                 )
                 time.sleep(RATE_LIMIT_SLEEPING_TIME)
+                attempt += 1
                 continue
             live_manager.update_log(
                 "HTTP error",
@@ -96,19 +100,29 @@ def _fetch_with_retries_single(
             )
             break
 
-        except ConnectTimeout:
+        except (ConnectTimeout, RequestsConnectionError) as conn_err:
+            if throttle.wait_if_offline(conn_err):
+                live_manager.update_log("Connection back", f"Internet is back: downloading page {page_idx} again.")
+                continue  # the outage does not count as an attempt
             live_manager.update_log(
                 "Timeout",
-                f"Connection timeout for page {page_idx}. Attempt {attempt + 1}/{retries}...",
+                f"Connection problem for page {page_idx}. Attempt {attempt + 1}/{retries}...",
             )
 
-        except Timeout:
+        except Timeout as timeout_err:
+            if throttle.wait_if_offline(timeout_err):
+                live_manager.update_log("Connection back", f"Internet is back: downloading page {page_idx} again.")
+                continue
             live_manager.update_log(
                 "Timeout",
                 f"Request timeout for page {page_idx}. Attempt {attempt + 1}/{retries}...",
             )
 
         except RequestException as req_err:
+            # e.g. the connection dropped while the image was arriving (ChunkedEncodingError)
+            if throttle.wait_if_offline(req_err):
+                live_manager.update_log("Connection back", f"Internet is back: downloading page {page_idx} again.")
+                continue
             live_manager.update_log(
                 "Network error",
                 f"Network error for page {page_idx}: {req_err}",
@@ -122,6 +136,7 @@ def _fetch_with_retries_single(
             )
             delay = 2 ** (attempt + 1) + random.uniform(1, 2)  # noqa: S311
             time.sleep(delay)
+        attempt += 1
 
     live_manager.update_log(
         "Download error",
