@@ -37,12 +37,12 @@ def _lock(fd: int) -> bool:
     """Lock the open file without waiting. False when another process holds it."""
     try:
         if os.name == "nt":
-            import msvcrt  # pylint: disable=import-outside-toplevel
+            import msvcrt  # pylint: disable=import-outside-toplevel,import-error
 
             os.lseek(fd, 0, os.SEEK_SET)
             msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
         else:
-            import fcntl  # pylint: disable=import-outside-toplevel
+            import fcntl  # pylint: disable=import-outside-toplevel,import-error
 
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         return True
