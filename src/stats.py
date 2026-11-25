@@ -1,11 +1,11 @@
 """Download statistics: since the first start (saved in stats.json) and for this session.
 
-For each site (E-Hentai, ExHentai, nhentai) it counts the galleries completed, the images
+For each site (E-Hentai, ExHentai, nhentai, hitomi) it counts the galleries completed, the images
 really downloaded (pages already on disk are not counted) and the bytes received, plus the
 time spent downloading (when at least one gallery is in progress) for the average speed.
 The tags of every completed gallery are counted too, to show what is downloaded the most.
 
-Every function is thread-safe: the download threads of both sites call them at once.
+Every function is thread-safe: the download threads of every site call them at once.
 """
 
 from __future__ import annotations
@@ -20,8 +20,8 @@ from pathlib import Path
 
 from src import config, tags as tag_utils
 
-SITES = ("e-hentai", "exhentai", "nhentai")
-SITE_LABELS = {"e-hentai": "E-Hentai", "exhentai": "ExHentai", "nhentai": "nhentai"}
+SITES = ("e-hentai", "exhentai", "nhentai", "hitomi")
+SITE_LABELS = {"e-hentai": "E-Hentai", "exhentai": "ExHentai", "nhentai": "nhentai", "hitomi": "hitomi"}
 SPEED_WINDOW = 5      # seconds averaged for the current speed
 SAVE_EVERY = 30       # seconds between saves of stats.json while downloading
 TOP_TAGS_KEPT = 500   # tags remembered in stats.json (the most frequent ones)
@@ -30,10 +30,12 @@ _lock = threading.RLock()
 
 
 def site_of_url(url: str) -> str:
-    """'e-hentai', 'exhentai' or 'nhentai' from a gallery link."""
+    """'e-hentai', 'exhentai', 'nhentai' or 'hitomi' from a gallery link."""
     host = (url or "").lower()
     if "nhentai" in host:
         return "nhentai"
+    if "hitomi.la" in host:
+        return "hitomi"
     if "exhentai" in host:
         return "exhentai"
     return "e-hentai"

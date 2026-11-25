@@ -7,6 +7,7 @@ optional support for clearing the file.
 import datetime
 import logging
 import re
+import shutil
 import threading
 from pathlib import Path
 
@@ -28,6 +29,28 @@ def write_file(filename: str, content: str = "") -> None:
     """
     with Path(filename).open("w", encoding="utf-8") as file:
         file.write(content)
+
+
+def clear_folder(folder: str | Path) -> tuple[int, list[str]]:
+    """Delete everything inside folder (the folder itself stays, e.g. a mounted volume).
+
+    Returns (items deleted, names that could not be deleted). A missing folder is not an error.
+    """
+    base = Path(folder)
+    removed, errors = 0, []
+    if not base.is_dir():
+        return removed, errors
+    for item in list(base.iterdir()):
+        try:
+            if item.is_dir() and not item.is_symlink():
+                shutil.rmtree(item)
+            else:
+                item.unlink()
+            removed += 1
+        except OSError as err:
+            logging.warning(f"Could not delete {item}: {err}")
+            errors.append(item.name)
+    return removed, errors
 
 
 def rotate_session_log(force: bool = False) -> None:

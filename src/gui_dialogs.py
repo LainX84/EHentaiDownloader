@@ -220,7 +220,7 @@ def show_about(root, palette: dict, fonts: dict) -> None:
     tk.Label(top, text=f"{APP_NAME}\nversion {APP_VERSION}", bg=palette["BG"], fg=palette["TEXT"],
              font=fonts["title"], justify="left").pack(side="left", anchor="w")
     lines = (
-        "Downloads E-Hentai, ExHentai and nhentai galleries as image folders or CBZ archives.",
+        "Downloads E-Hentai, ExHentai, nhentai and hitomi galleries as image folders or CBZ archives.",
         "",
         f"This version: {PROJECT_URL}",
         f"Original project: {UPSTREAM_URL}",

@@ -34,7 +34,7 @@ LOG_LINES_KEPT = 3000  # log lines kept in memory for the browser (the whole log
 
 FORMAT_OPTIONS = image_formats.LABELS  # default at the first start: WebP (small files, keeps animations)
 
-LANE_LABELS = {throttle.SITE_EH: "E-Hentai/ExHentai", throttle.SITE_NH: "nhentai"}
+LANE_LABELS = {throttle.SITE_EH: "E-Hentai/ExHentai", throttle.SITE_NH: "nhentai", throttle.SITE_HI: "hitomi"}
 LANE_IDLE = "Idle"
 THEMES = ("auto", "light", "dark")
 
@@ -59,9 +59,11 @@ def counter_day() -> str:
 
 
 def site_lane(url: str) -> str:
-    """Download lane of a link: "nhentai" for nhentai.net, "E-Hentai" for everything else."""
-    from src import nhentai  # pylint: disable=import-outside-toplevel
-    return throttle.SITE_NH if nhentai.is_nhentai_url(url or "") else throttle.SITE_EH
+    """Download lane of a link: "nhentai" for nhentai.net, "hitomi" for hitomi.la, "E-Hentai" for the rest."""
+    from src import hitomi, nhentai  # pylint: disable=import-outside-toplevel
+    if nhentai.is_nhentai_url(url or ""):
+        return throttle.SITE_NH
+    return throttle.SITE_HI if hitomi.is_hitomi_url(url or "") else throttle.SITE_EH
 
 
 def log_tag(event: str, details: str) -> str:
@@ -70,7 +72,7 @@ def log_tag(event: str, details: str) -> str:
     if any(w in low for w in ("error", "fail", "exception", "critical")):
         return "error"
     if any(w in low for w in ("warn", "notice", "skip", "already present", "pause", "rate limit",
-                              "waiting", "limit")):
+                              "waiting", "limit", "cancel", "stop")):
         return "warning"
     if any(w in low for w in ("success", "complete", "downloaded", "renamed", "created", "ok")):
         return "ok"
@@ -176,6 +178,8 @@ class Engine:
         self._counter_saved_at = time.monotonic()
         self._roll_counter()
         self._run_seq = 0  # +1 at every start: a late bar reset never touches a newer run
+        self._stop_requested = False     # Stop: finish the galleries in progress, start no new one
+        self._cancel_requested = False   # Cancel: stop now, then empty temp/ and both lists
 
         # Batch list (URLs.txt): one dict per line, with a stable id
         self._lines: list[dict] = []
@@ -308,7 +312,7 @@ class Engine:
             self.log("Settings", "Folders by favorite tag ON: a gallery with a favorite tag goes into "
                                  "<site>/<label>/ (for example E-Hentai/Netorare/)."
                      if new["tag_folders"] else
-                     "Folders by favorite tag OFF: every gallery goes into E-Hentai/ or nhentai/.")
+                     "Folders by favorite tag OFF: every gallery goes into E-Hentai/, nhentai/ or hitomi/.")
         if new["comic_info"] != current["comic_info"]:
             set_comic_info(new["comic_info"])
             self.log("Settings", "ComicInfo.xml ON: new CBZ archives include title, tags and source link."
@@ -470,6 +474,81 @@ class Engine:
             self._set_status("▶ Downloads resumed.")
             self.log("Resume", "Downloads resumed.")
             return False
+
+    def request_stop(self) -> None:
+        """'Stop': the galleries already downloading finish, then nothing new starts.
+
+        The links not started yet stay in the batch list (and in Retry Failed for a retry).
+        """
+        with self._lock:
+            if not self.mode:
+                raise EngineError("Nothing is downloading.")
+            if self._stop_requested or self._cancel_requested:
+                return
+            mode = self.mode
+            if mode == "verify":
+                what = "the link being checked finishes, then the check stops."
+            elif mode == "single":
+                what = "the gallery in progress finishes, then the download ends."
+            else:
+                what = ("the galleries in progress finish, then the download ends: the ones not started yet stay in "
+                        + ("the retry queue." if mode == "retry" else "the list for the next Start Batch."))
+            # Status and log first: the run may end (with its own summary) right after
+            self.status = "⏹ Stopping: " + what
+            append_session_banner("STOP REQUESTED BY THE USER")
+            self.log("Stop", "Stop requested: " + what)
+            self._stop_requested = True
+            if self._batch:
+                self._batch["accepting"] = False   # links added from now on wait for the next batch
+                self._touch_lines()
+            if throttle.is_paused():  # a paused gallery could never finish: resume it
+                throttle.set_paused(False)
+
+    def request_cancel(self) -> None:
+        """'Cancel' (confirmed in the page): stop every download now, then empty temp/ and both lists."""
+        with self._lock:
+            if not self.mode:
+                raise EngineError("Nothing is downloading.")
+            if self.mode == "verify":
+                raise EngineError("The link check can only be stopped (Stop).")
+            if self._cancel_requested:
+                return
+            self._cancel_requested = True
+            # Status first: the workers may end (and the cleanup set its own status) right after
+            self.status = "✖ Cancelling: waiting for the images being received to end…"
+            append_session_banner("CANCEL REQUESTED BY THE USER")
+            self.log("Cancel", "Cancel requested: the downloads stop as soon as the images being received end.")
+            throttle.request_cancel()   # waiting threads wake up and stop at once
+            batch = self._batch
+            if batch:
+                batch["accepting"] = False
+                for lane_queue in batch["queues"].values():
+                    for task in lane_queue:
+                        batch["cancelled"].add(task["id"])
+                    lane_queue.clear()
+
+    def _finish_cancel(self) -> None:
+        """Dispatcher, after a cancelled run ended: empty temp/, the batch list and Retry Failed (lock held)."""
+        from src.cli.downloader import save_failed_urls  # pylint: disable=import-outside-toplevel
+        from src.file_utils import clear_folder  # pylint: disable=import-outside-toplevel
+        throttle.clear_cancel()
+        for timer in self._pending_removals.values():
+            timer.cancel()
+        self._pending_removals = {}
+        self._lines = []
+        self.sort_offer = False
+        self._touch_lines()
+        self._save_urls_txt()
+        save_failed_urls([])
+        removed, errors = clear_folder(config.TEMP_FOLDER)
+        self.bar1 = {"frac": 0.0, "text": "0%", "label": "Total:"}
+        append_session_banner("DOWNLOAD CANCELLED BY THE USER")
+        details = (f"Downloads cancelled: temp emptied ({removed} item(s) deleted), the batch list and "
+                   "the retry queue are empty now.")
+        if errors:
+            details += f" {len(errors)} item(s) could not be deleted (in use?): {', '.join(errors[:3])}"
+        self.log("Cancelled", details)
+        self.status = "✖ Downloads cancelled: temp, batch list and Retry Failed emptied."
 
     @staticmethod
     def resume_after_ban() -> None:
@@ -681,7 +760,7 @@ class Engine:
         return len(pairs)
 
     def sort_by_size(self) -> bool:
-        """Sort the list by site (E-Hentai / ExHentai, then nhentai), then size (fewer images first)."""
+        """Sort the list by site (E-Hentai / ExHentai, then nhentai, then hitomi), then size (fewer images first)."""
         with self._lock:
             self._guard_list_editable(running_ok=False)
             return self._sort_lines()
@@ -702,8 +781,8 @@ class Engine:
                 status = gallery_status(url) if url else ""
                 line["state"] = ("done" if status == "GOOD" else "fail") if status else states.get(line["text"], "")
             self._save_urls_txt()
-        self.log("Download order", "List sorted: E-Hentai / ExHentai first, then nhentai; in each, galleries "
-                                   "with fewer images first.")
+        self.log("Download order", "List sorted: E-Hentai / ExHentai first, then nhentai, then hitomi; in each, "
+                                   "galleries with fewer images first.")
         return True
 
     def dismiss_sort(self) -> None:
@@ -786,7 +865,9 @@ class Engine:
             raise EngineError("A download is already in progress. Wait for it to finish first.")
         self.mode = mode
         self._run_seq += 1
+        self._stop_requested = self._cancel_requested = False
         throttle.set_paused(False)
+        throttle.clear_cancel()
         self.bar1 = {"frac": 0.0, "text": "0%", "label": bar_label}
         self.lanes = {lane: {"frac": None, "text": LANE_IDLE} for lane in throttle.SITES}
 
@@ -818,6 +899,8 @@ class Engine:
             success = ok
             if failed_items or not ok:
                 failed_by_url[url] = failed_items
+        except throttle.DownloadCancelled:
+            pass  # _on_download_done cleans up
         except Exception as exc:  # pylint: disable=broad-except
             self.log("ERROR", str(exc))
             failed_by_url[url] = [str(exc)]
@@ -865,6 +948,9 @@ class Engine:
             session = create_session()
             total = len(entries)
             for idx, (line_id, url) in enumerate(entries):
+                if self._stop_requested:
+                    self.log("Stopped", f"Link check stopped by the user: {total - idx} link(s) not checked.")
+                    break
                 self._call(self._set_line, line_id, "active")
                 self._set_status(f"[{idx + 1}/{total}] {url}")
                 result = verify_gallery(url, session=session)
@@ -886,6 +972,8 @@ class Engine:
                 self._q.put(("UPDATE_BAR1", frac, f"{idx + 1}/{total} ({frac * 100:.0f}%)"))
                 if idx < total - 1 and result["domain"]:
                     courtesy_pause()
+        except throttle.DownloadCancelled:
+            pass
         except Exception as exc:  # pylint: disable=broad-except
             self.log("ERROR", str(exc))
         finally:
@@ -895,6 +983,7 @@ class Engine:
         """Dispatcher: save the annotated list, print the summary, sort the list by site and size."""
         with self._lock:
             self.mode = None
+            self._stop_requested = self._cancel_requested = False
             self._save_urls_txt()
             sources = ", ".join(f"{d}: {n}" for d, n in sorted(domains.items())) or "none"
             summary = f"{ok_count} valid, {bad_count} with problems. Download source → {sources}"
@@ -920,7 +1009,7 @@ class Engine:
                 self.remove_duplicates()
             if not self._entries():
                 raise EngineError("URLs.txt is empty. Add at least one URL before starting.")
-            self._sort_lines()  # by site, then size: the two lanes go down the list in order
+            self._sort_lines()  # by site, then size: the site lanes go down the list in order
             self._clear_marks()
             fmt, rename, cbz = self._options()
             self._begin("batch", "Batch Total:")
@@ -1008,7 +1097,8 @@ class Engine:
         with self._lock:
             batch = self._batch
             lane_queue = batch["queues"][lane]
-            if lane_queue:
+            # Stop / Cancel: no new gallery starts (with Stop the lines stay in the list)
+            if lane_queue and not (self._stop_requested or self._cancel_requested):
                 position = {line["task"]: idx for idx, line in enumerate(self._lines) if line["task"]}
                 waiting = [task for task in lane_queue if task["id"] not in batch["cancelled"]
                            and task["id"] in position]
@@ -1038,6 +1128,9 @@ class Engine:
                     return
                 try:
                     self._run_batch_task(task, lane)
+                except throttle.DownloadCancelled:
+                    with self._lock:   # Cancel: the gallery stops here (temp/ is emptied at the end)
+                        self._batch["task_state"][task["id"]] = "cancelled"
                 except Exception as exc:  # pylint: disable=broad-except
                     self.log("ERROR", f"{task['url']}: {exc}")
                     with self._lock:
@@ -1181,7 +1274,7 @@ class Engine:
         batch = self._batch
         try:
             session = create_session()
-            while not batch["stop"].is_set():
+            while not (batch["stop"].is_set() or self._stop_requested or self._cancel_requested):
                 try:
                     task = batch["verify_queue"].get(timeout=0.5)
                 except queue.Empty:
@@ -1204,6 +1297,8 @@ class Engine:
                     self.log("Link error", f"{task['url']}: {result['error']}")
                 if result["domain"]:
                     courtesy_pause()
+        except throttle.DownloadCancelled:
+            pass
         except Exception as exc:  # pylint: disable=broad-except
             self.log("ERROR", f"Link check: {exc}")
 
@@ -1253,9 +1348,12 @@ class Engine:
             for thread in threads:
                 thread.join()
             still_failing = [remaining[idx] for idx in sorted(remaining)]
-            success = not still_failing
-            save_failed_urls(still_failing)
-            self.log("Retry completed", f"Processed: {total} | Still failing: {len(still_failing)}")
+            success = not failed_by_url
+            if not self._cancel_requested:  # after Cancel the list is emptied anyway
+                save_failed_urls(still_failing)
+            not_retried = len(still_failing) - len(failed_by_url)
+            self.log("Retry completed", f"Processed: {total - not_retried} | Still failing: {len(failed_by_url)}"
+                     + (f" | Not retried (Stop): {not_retried}, still in the queue" if not_retried > 0 else ""))
             self._q.put(("UPDATE_BAR1", 1.0, f"{total}/{total} (100%)"))
         except Exception as exc:  # pylint: disable=broad-except
             self.log("ERROR", str(exc))
@@ -1271,7 +1369,12 @@ class Engine:
         """Worker thread: retry the albums of one site, one after another."""
         from src.cli.downloader import download_album, gallery_name  # pylint: disable=import-outside-toplevel
         fmt, rename, cbz = options
-        for idx, url in items:
+        for pos, (idx, url) in enumerate(items):
+            if self._stop_requested or self._cancel_requested:
+                with lock:  # Stop: the albums not tried yet stay in failed_downloads.txt
+                    for rest_idx, rest_url in items[pos:]:
+                        remaining[rest_idx] = rest_url
+                return
             with lock:
                 counter["started"] += 1
                 started = counter["started"]
@@ -1282,6 +1385,11 @@ class Engine:
             try:
                 ok, failed_items = download_album(url, lm, image_format=fmt, rename_sequential=rename,
                                                   name_hint=gallery_name(url), create_cbz=cbz)
+            except throttle.DownloadCancelled:
+                with lock:
+                    for rest_idx, rest_url in items[pos:]:
+                        remaining[rest_idx] = rest_url
+                return
             except Exception as exc:  # pylint: disable=broad-except
                 self.log("ERROR", f"{url}: {exc}")
                 ok, failed_items = False, [str(exc)]
@@ -1300,10 +1408,21 @@ class Engine:
         from src.general_utils import validate_gallery_url  # pylint: disable=import-outside-toplevel
         with self._lock:
             was_batch = self.mode == "batch"
+            run_mode = self.mode
             self.mode = None
             self._save_counter()
             self._batch = None
             throttle.set_paused(False)
+            cancelled, stopped = self._cancel_requested, self._stop_requested
+            self._stop_requested = self._cancel_requested = False
+            if cancelled:
+                # Cancel: no summary, just the cleanup
+                self.lanes = {lane: {"frac": None, "text": LANE_IDLE} for lane in throttle.SITES}
+                self._finish_cancel()
+        if cancelled:
+            self.reload_retry_list()
+            return
+        with self._lock:
             if success:
                 self.bar1["frac"], self.bar1["text"] = 1.0, "100%"
             self.lanes = {lane: {"frac": None, "text": LANE_IDLE} for lane in throttle.SITES}
@@ -1354,6 +1473,18 @@ class Engine:
             self._append_log(ts(), "", sep, "warn_banner")
             self._append_log(ts(), "", "Use 'Retry Failed' to retry the missing files.", "warn_banner")
             status = f"⚠ Download not complete: {count} {gal_word} with problems{img_part} — use Retry Failed."
+        if stopped:
+            if run_mode == "batch":
+                with self._lock:
+                    waiting = max(0, len(self._entries()) - len(self._pending_removals))
+                left = f"{waiting} link(s) left in the list for the next Start Batch."
+            elif run_mode == "retry":
+                left = "The albums not retried are still in Retry Failed."
+            else:
+                left = ""
+            append_session_banner("DOWNLOAD STOPPED BY THE USER")
+            self._append_log(ts(), "", f"⏹  Stopped by the user. {left}", "warn_banner")
+            status = f"⏹ Stopped. {left}".strip()
         with self._lock:
             self.status = status
         self.reload_retry_list()
@@ -1504,6 +1635,8 @@ class Engine:
             data = {
                 "mode": self.mode,
                 "paused": throttle.is_paused() and bool(self.mode),
+                "stopping": self._stop_requested and bool(self.mode),
+                "cancelling": self._cancel_requested and bool(self.mode),
                 "status": self.status,
                 "bar1": dict(self.bar1),
                 "lanes": [{"site": lane, "label": LANE_LABELS[lane], **self.lanes[lane]} for lane in throttle.SITES],

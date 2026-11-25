@@ -26,7 +26,7 @@ from src.gui.style import ts as _ts
 
 LINE_TAGS_SUFFIX = "_batch_line"         # state colours of a whole line
 DECO_TAGS = ("deco_hidden", "deco_badge", "deco_ok", "deco_ko")
-LOGO_FILES = {"EHENTAI": "ehentai.png", "EXHENTAI": "exhentai.png", "NHENTAI": "nhentai.png"}
+LOGO_FILES = {"EHENTAI": "ehentai.png", "EXHENTAI": "exhentai.png", "NHENTAI": "nhentai.png", "HITOMI": "hitomi.png"}
 LOGO_RATIO = 4  # width = 4 × height (40×10 at the smallest size)
 
 

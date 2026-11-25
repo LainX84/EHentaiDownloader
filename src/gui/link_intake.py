@@ -24,8 +24,13 @@ except ImportError:  # pragma: no cover - the program works without it
     TkinterDnD = None
     DND_FILES = DND_TEXT = ""
 
+# tkinterdnd2 gives the drop methods to every widget, but not to the main window (tk.Tk):
+# the mixin brings them, so the window itself (its borders, the space between widgets) is a
+# drop target too.
+_DnDBase = TkinterDnD.DnDWrapper if TkinterDnD is not None else object
 
-class LinkIntakeMixin:  # pylint: disable=too-few-public-methods,no-member
+
+class LinkIntakeMixin(_DnDBase):  # pylint: disable=too-few-public-methods,no-member
     """Paste / drop / clipboard handling. Mixed into EHentaiGUI."""
 
     # ------------------------------------------------------------ common
@@ -115,7 +120,13 @@ class LinkIntakeMixin:  # pylint: disable=too-few-public-methods,no-member
     # ------------------------------------------------------------ drag and drop
 
     def _setup_drag_and_drop(self) -> bool:
-        """Accept links (and text files of links) dropped on the window. False if unavailable."""
+        """Accept links (and text files of links) dropped anywhere on the main window.
+
+        Every widget of the window is a drop target, not only the batch list: the header, the
+        tabs, the progress bars, the log, the status bar... Widgets created later (a tab built
+        on first open, a rebuilt panel) become drop targets when they appear (<Map>). Dialog
+        windows are left out. False if drag and drop is unavailable.
+        """
         if TkinterDnD is None:
             return False
         try:
@@ -123,37 +134,133 @@ class LinkIntakeMixin:  # pylint: disable=too-few-public-methods,no-member
         except (RuntimeError, tk.TclError) as err:
             logging.info("Drag and drop not available: %s", err)
             return False
-        targets = [self._nb, self._tab_single, self._tab_batch, self._tab_retry, self._batch_editor]
-        targets += self._tab_single.winfo_children() + self._tab_batch.winfo_children()
-        for widget in targets:
-            try:
-                widget.drop_target_register(DND_TEXT, DND_FILES)
-                widget.dnd_bind("<<Drop>>", self._on_drop)
-            except (AttributeError, tk.TclError):
-                continue
+        self._dnd_targets: set[str] = set()
+        self._dnd_hover_job = None
+        self._dnd_status_before: str | None = None
+        self._register_drop_tree(self)
+        # New widgets: registered the first time they are shown
+        self.bind_all("<Map>", self._on_widget_mapped, add="+")
         return True
 
-    def _on_drop(self, event) -> str:
-        """Links dragged from a browser, a text selection or .txt / .url files."""
-        data = getattr(event, "data", "") or ""
-        texts = [data]
-        try:
-            items = self.tk.splitlist(data)
-        except tk.TclError:
-            items = ()
-        for item in items:
-            path = Path(item)
+    def _register_drop_tree(self, widget) -> None:
+        """Make widget and all its children (same window only) drop targets."""
+        stack = [widget]
+        while stack:
+            current = stack.pop()
+            self._register_drop_target(current)
             try:
-                if path.is_file() and path.stat().st_size <= _MAX_DROPPED_FILE_BYTES:
-                    texts.append(path.read_text(encoding="utf-8", errors="replace"))
-            except (OSError, ValueError):
+                stack.extend(current.winfo_children())
+            except tk.TclError:
                 continue
-        links = extract_gallery_links("\n".join(texts))
-        if links:
-            self._add_links_to_batch(links, "Drop")
-        else:
-            self._status_var.set("Nothing to add: no gallery links in what was dropped.")
-        return getattr(event, "action", "copy")
+
+    def _register_drop_target(self, widget) -> None:
+        """Make one widget a drop target (once). Menus and other windows are skipped."""
+        if not isinstance(widget, tk.Misc) or isinstance(widget, tk.Menu):
+            return
+        try:
+            path = str(widget)
+            if path in self._dnd_targets or not widget.winfo_exists():
+                return
+            if widget is not self and widget.winfo_toplevel() is not self:
+                return  # a dialog (Settings, Account...) or a popup
+            widget.drop_target_register(DND_TEXT, DND_FILES)
+            widget.dnd_bind("<<DropEnter>>", self._on_drag_enter)
+            widget.dnd_bind("<<DropPosition>>", self._on_drag_position)
+            widget.dnd_bind("<<DropLeave>>", self._on_drag_leave)
+            widget.dnd_bind("<<Drop>>", self._on_drop)
+        except (AttributeError, KeyError, tk.TclError):
+            return
+        self._dnd_targets.add(path)
+
+    def _on_widget_mapped(self, event) -> None:
+        """<Map> of any widget: register it (and its children) if it is new."""
+        widget = event.widget
+        if isinstance(widget, tk.Misc) and str(widget) not in self._dnd_targets:
+            self._register_drop_tree(widget)
+
+    @staticmethod
+    def _drop_action(event) -> str:
+        """The action to answer to the drag source: always a copy (the link stays where it is)."""
+        actions = str(getattr(event, "actions", "") or "")
+        if actions and "copy" not in actions and "link" in actions:
+            return "link"
+        return "copy"
+
+    def _on_drag_enter(self, event) -> str:
+        """Something is dragged over the window: say what will happen."""
+        try:
+            if self._dnd_hover_job is not None:
+                self.after_cancel(self._dnd_hover_job)
+                self._dnd_hover_job = None
+            if self._dnd_status_before is None:
+                self._dnd_status_before = self._status_var.get()
+                self._status_var.set("⬇ Release to add the gallery links to the batch list.")
+        except tk.TclError:
+            pass
+        return self._drop_action(event)
+
+    def _on_drag_position(self, event) -> str:
+        """Answered at every mouse move of a drag: must stay instant."""
+        return self._drop_action(event)
+
+    def _on_drag_leave(self, _event=None) -> None:
+        """The drag left a widget: restore the status bar unless it entered another one."""
+        try:
+            if self._dnd_hover_job is None:
+                self._dnd_hover_job = self.after(150, self._end_drag_hover)
+        except tk.TclError:
+            pass
+
+    def _end_drag_hover(self, restore: bool = True) -> None:
+        """The drag is over (left the window or dropped)."""
+        if self._dnd_hover_job is not None:
+            try:
+                self.after_cancel(self._dnd_hover_job)
+            except tk.TclError:
+                pass
+        self._dnd_hover_job = None
+        before, self._dnd_status_before = self._dnd_status_before, None
+        if restore and before is not None:
+            self._status_var.set(before)
+
+    def _on_drop(self, event) -> str:
+        """Links dragged from a browser, a text selection or .txt / .url files.
+
+        The drop is answered at once and the links are added a moment later: the drag
+        source (the browser) waits for this answer, and a slow answer (big list, a file to
+        read, a busy window during a download) leaves the next drags refused until it
+        times out.
+        """
+        data = str(getattr(event, "data", "") or "")
+        try:
+            self._end_drag_hover(restore=False)
+            self.after(1, lambda: self._process_drop(data))
+        except tk.TclError:
+            pass
+        return self._drop_action(event)
+
+    def _process_drop(self, data: str) -> None:
+        """Take the gallery links out of what was dropped and add them to the batch list."""
+        try:
+            texts = [data]
+            try:
+                items = self.tk.splitlist(data)
+            except tk.TclError:
+                items = ()
+            for item in items:
+                path = Path(item)
+                try:
+                    if path.is_file() and path.stat().st_size <= _MAX_DROPPED_FILE_BYTES:
+                        texts.append(path.read_text(encoding="utf-8", errors="replace"))
+                except (OSError, ValueError):
+                    continue
+            links = extract_gallery_links("\n".join(texts))
+            if links:
+                self._add_links_to_batch(links, "Drop")
+            else:
+                self._status_var.set("Nothing to add: no gallery links in what was dropped.")
+        except Exception as err:  # pylint: disable=broad-except
+            logging.warning("Drop: could not add the links: %s", err)
 
     # ------------------------------------------------------------ clipboard watcher
 

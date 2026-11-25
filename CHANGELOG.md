@@ -4,6 +4,71 @@ All notable changes to this fork of EHentai Downloader. Versions follow the rele
 (`v<version>`); the ready-to-use apps of each version are on the
 [releases page](https://github.com/LainX84/EHentaiDownloader/releases).
 
+## [Unreleased]
+
+## [2.2.0] – 2026-11-25
+
+### Added
+- **hitomi.la** as a fourth site (desktop, Docker / web and command line): paste any link of a
+  gallery (`/galleries/<number>.html`, `/reader/…`, `/doujinshi/<title>-<number>.html`,
+  `/manga/…`, `/cg/…`, `/gamecg/…`, `/imageset/…`). No account or cookies needed. The gallery is
+  read with one request (title, tags, images); the image addresses come from the site's `gg.js`,
+  read again every 30 minutes and at once when an image server refuses an image. If the site moves
+  its data servers to another domain, the new one is found by itself.
+- hitomi has **its own download lane** (purple progress bar), pace and HTTP 429 pause, so it
+  downloads side by side with E-Hentai / ExHentai and nhentai. Albums go to `Downloads/hitomi/`
+  (or `hitomi/<favorite tag>/`), the lists show the HITOMI logo, the statistics have a hitomi row,
+  and its tags (`female:…`, `male:…`, `artist:…`, `language:…`…) work with the favorite tags.
+- hitomi gives only WebP, AVIF and sometimes JPEG XL images (no original files): the program asks
+  for the chosen *Image Format* when the site has it, so nothing is converted; otherwise it takes
+  the WebP and converts it. *Native (Original)* saves the WebP as it is.
+- hitomi titles get the **authors in front**, as on E-Hentai / nhentai: `[Artist] Title` or
+  `[Group (Artist)] Title` (folders, CBZ names, lists and the ComicInfo writer).
+- **Cautious with hitomi** (it publishes no limits, but answers *503* to clients that are too
+  fast): 1, 2, 2, 3, 4 images in parallel for Speed 1–5 (`HITOMI_WORKERS`) and a 1.1–2.5 s pause
+  after each image. On a **soft ban** (503 / 429) every hitomi download pauses for the time asked
+  (or 30–60 s) **plus a random 45–60 s**, with a warning in the log, *Soft ban by hitomi* and a
+  countdown in the status bar, and a notification when the window is in the tray; then the same
+  image is asked again (not counted as failed). After 2 soft bans in a gallery the rest of it goes
+  one image at a time.
+- **Stop** and **Cancel** buttons (desktop and Docker / web), next to *Pause*, for a long
+  session that you want to end:
+  - **⏹ Stop** lets the galleries already downloading finish, then the download ends. The links
+    not started yet stay in the batch list (and, for *Retry Failed*, in the retry queue), so the
+    next *Start Batch* goes on from there. During *Verify Links* it stops after the link being
+    checked.
+  - **✖ Cancel** asks for a confirmation, then stops everything at once (also during a pause, an
+    IP-ban wait or a lost connection): the galleries in progress are interrupted, the `temp/`
+    folder is emptied (partial galleries of earlier sessions too), and both the batch list
+    (`URLs.txt`) and the retry queue (`failed_downloads.txt`) are emptied. Galleries already
+    completed stay in the download folder. The *When done* action is not run after a Cancel.
+  - The tray menu has *Stop after the current galleries* and *Cancel all downloads…* too.
+
+- **One window only** (desktop): starting the program while it is already open does not open
+  a second copy (which would write the same `URLs.txt`, `settings.json`, statistics…): the
+  open window comes to the front, also from the system tray. Windows, Linux and macOS; the
+  lock is per data folder and is freed by the system even after a crash.
+- **Confirmation before closing** (desktop): window ✕, *File → Exit* and the tray's *Quit* ask
+  first when downloads are running (also paused), links are waiting in the batch list or
+  failed downloads are waiting to be retried, and list what is pending. The lists are saved
+  as before. Closing during a pause no longer happens without asking.
+
+### Changed
+- Desktop: **Pause / Stop / Cancel** are now at the right of the progress bars, so they are at
+  hand for single downloads and *Retry Failed* too (Pause used to be only in the Batch tab).
+- Desktop: **drag and drop of links works anywhere on the window** (header, tabs, progress bars,
+  log, status bar…), not only on the batch list; while dragging, the status bar says that
+  releasing adds the links to the batch list.
+- Docker / web: **drag and drop of links onto the page** too, anywhere (links from another tab,
+  selected text, `.txt` / `.url` files): the gallery links go to the batch list, as with Ctrl+V.
+  A link dropped on the *Single Download* field still goes in that field.
+
+### Fixed
+- Desktop: links dragged onto the window **during a download** were sometimes refused until a
+  timeout. The drop is now answered at once (the links are added right after), and the window
+  stays responsive during fast downloads: the messages of the download threads are handled a
+  bit at a time, and the log box keeps its last 5,000 lines (`session.log` still has them all).
+
 ## [2.1.0] – 2026-11-20
 
 ### Added
@@ -204,6 +269,9 @@ First release of the fork with ready-to-use apps.
 - **Start-up notice** (disclaimer: no warranty, developed with the help of Claude AI) with
   *Don't show this again for 30 days*; *Help* menu with GitHub page, license and about.
 
+[Unreleased]: https://github.com/LainX84/EHentaiDownloader/compare/v2.2.0...HEAD
+[2.2.0]: https://github.com/LainX84/EHentaiDownloader/compare/v2.1.0...v2.2.0
+[2.1.0]: https://github.com/LainX84/EHentaiDownloader/compare/v2.0.4...v2.1.0
 [2.0.4]: https://github.com/LainX84/EHentaiDownloader/compare/v2.0.3...v2.0.4
 [2.0.3]: https://github.com/LainX84/EHentaiDownloader/compare/v2.0.2...v2.0.3
 [2.0.2]: https://github.com/LainX84/EHentaiDownloader/compare/v2.0.1...v2.0.2

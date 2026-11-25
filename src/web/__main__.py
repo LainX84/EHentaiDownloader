@@ -21,7 +21,7 @@ def _setup_folders() -> tuple[Path, Path]:
 
     from src import config  # pylint: disable=import-outside-toplevel
 
-    config.DOWNLOAD_FOLDER = "."  # E-Hentai/ and nhentai/ directly in the data folder
+    config.DOWNLOAD_FOLDER = "."  # E-Hentai/, nhentai/ and hitomi/ directly in the data folder
     config.URLS_FILE = str(config_dir / "URLs.txt")
     config.FAILED_URLS_FILE = str(config_dir / "failed_downloads.txt")
     config.SETTINGS_FILE = str(config_dir / "settings.json")

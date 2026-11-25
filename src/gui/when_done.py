@@ -33,6 +33,15 @@ class WhenDoneMixin:  # pylint: disable=too-few-public-methods,no-member
         self._set_buttons_state("normal")
         throttle.set_paused(False)
         self._pause_btn.configure(state="disabled", text="⏸  Pause")
+        self._stop_btn.configure(state="disabled")
+        self._cancel_btn.configure(state="disabled")
+        if self._cancel_requested:
+            # Cancel: no summary and no "When done" action, just the cleanup
+            self._cancel_requested = self._stop_requested = False
+            self._finish_cancel()
+            return
+        stopped = self._stop_requested
+        self._stop_requested = False
         if success:
             self._bar1["value"] = 100
             self._bar1_pct.configure(text="100%")
@@ -118,6 +127,18 @@ class WhenDoneMixin:  # pylint: disable=too-few-public-methods,no-member
             self._status_var.set(
                 f"⚠ Download not complete: {n} {gal_word} with problems{img_part} — use Retry Failed."
             )
+
+        if stopped:
+            if self._run_mode == "batch":
+                waiting = max(0, len(self._editor_entries()) - len(getattr(self, "_pending_removals", {})))
+                left = f"{waiting} link(s) left in the list for the next Start Batch."
+            elif self._run_mode == "retry":
+                left = "The albums not retried are still in Retry Failed."
+            else:
+                left = ""
+            append_session_banner("DOWNLOAD STOPPED BY THE USER")
+            self._log_box.insert(END, f"[{ts}] ⏹  Stopped by the user. {left}\n", "warn_banner")
+            self._status_var.set(f"⏹ Stopped. {left}".strip())
 
         self._log_box.see(END)
         self._log_box.configure(state="disabled")
@@ -238,32 +259,69 @@ class WhenDoneMixin:  # pylint: disable=too-few-public-methods,no-member
         self._closed = True
         self.destroy()
 
+    def _close_pending(self) -> list[str]:
+        """What closing the program would leave behind: one line per item (empty = nothing)."""
+        lines: list[str] = []
+        if self._running:
+            paused = " (paused)" if throttle.is_paused() else ""
+            active = len(getattr(self, "_active_tasks", {}) or {})
+            if self._run_mode == "verify":
+                lines.append(f"Link check in progress{paused}: it will be interrupted.")
+            elif active:
+                lines.append(f"{active} galler{'ies' if active != 1 else 'y'} downloading now{paused}: "
+                             "the download will be interrupted.")
+            else:
+                lines.append(f"A download is in progress{paused}: it will be interrupted.")
+        waiting = 0
+        try:
+            for line_no, _url, _name in self._editor_entries():
+                tags = self._batch_editor.tag_names(f"{line_no}.0")
+                if not {"done_batch_line", "fail_batch_line", "active_batch_line"} & set(tags):
+                    waiting += 1
+        except Exception:  # pylint: disable=broad-except  # window being destroyed
+            pass
+        if waiting:
+            lines.append(f"{waiting} link{'s' if waiting != 1 else ''} waiting in the batch list.")
+        try:
+            from src.cli.retry import collect_retry_urls  # pylint: disable=import-outside-toplevel
+            failed = len(collect_retry_urls())
+        except Exception:  # pylint: disable=broad-except
+            failed = 0
+        if failed:
+            lines.append(f"{failed} failed download{'s' if failed != 1 else ''} to retry.")
+        return lines
+
     def _on_window_close(self) -> None:
-        """Handler called when user closes the GUI window."""
-        if self._running and throttle.is_paused():
-            append_session_banner("APPLICATION CLOSED (download paused, list saved)")
-        elif self._running and self._tray_enabled() and tray_area_available():
-            answer = messagebox.askyesnocancel(
+        """Window X, File → Exit and the tray's Quit: ask first when something is left to do."""
+        pending = self._close_pending()
+        if pending:
+            details = "\n".join(f"•  {line}" for line in pending)
+            saved = "The batch list and the retry queue are saved: you will find them at the next start."
+            if self._running and self._tray_enabled() and tray_area_available():
+                answer = messagebox.askyesnocancel(
+                    "Close Application",
+                    f"{details}\n\n{saved}\n\n"
+                    "Yes: keep downloading in the background (the window goes to the system tray).\n"
+                    "No: stop and close the program.\n"
+                    "Cancel: go back.",
+                    icon="warning", default="cancel",
+                )
+                if answer is None:
+                    return
+                if answer:
+                    if not self._hide_to_tray("Window hidden in the system tray: the downloads go on. "
+                                              "Use Quit in the tray menu to close the program."):
+                        self.iconify()   # no tray after all: keep downloading, minimized
+                    return
+            elif not messagebox.askyesno(
                 "Close Application",
-                "A download is in progress.\n\n"
-                "Yes: keep downloading in the background (the window goes to the system tray).\n"
-                "No: stop the download and close the program.\n"
-                "Cancel: go back.",
-            )
-            if answer is None:
-                return
-            if answer:
-                if not self._hide_to_tray("Window hidden in the system tray: the downloads go on. "
-                                          "Use Quit in the tray menu to close the program."):
-                    self.iconify()   # no tray after all: keep downloading, minimized
-                return
-            append_session_banner("APPLICATION CLOSED (running download interrupted by the user)")
-        elif self._running:
-            if not messagebox.askyesno(
-                "Close Application",
-                "A download is in progress. Do you really want to stop it and close the program?",
+                f"{details}\n\n{saved}\n\nDo you really want to close the program?",
+                icon="warning", default="no",
             ):
                 return
+        if self._running and throttle.is_paused():
+            append_session_banner("APPLICATION CLOSED (download paused, list saved)")
+        elif self._running:
             append_session_banner("APPLICATION CLOSED (running download interrupted by the user)")
         else:
             append_session_banner("APPLICATION CLOSED")

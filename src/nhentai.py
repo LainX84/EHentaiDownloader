@@ -205,7 +205,7 @@ def _wait_api_slot(interval: float) -> None:
         slot = max(now, _next_api_call)
         _next_api_call = slot + interval
     if slot > now:
-        time.sleep(slot - now)
+        throttle.sleep(slot - now)
 
 
 def fetch(session: requests.Session, url: str, referer: str | None = None,
@@ -244,7 +244,7 @@ def fetch(session: requests.Session, url: str, referer: str | None = None,
         if attempt < retries - 1:
             delay = 2 ** (attempt + 1) + random.uniform(0.5, 1.5)  # noqa: S311
             logging.warning(f"Temporary error on {url} ({last_error}). Retry {attempt + 2}/{retries} in {delay:.0f}s...")
-            time.sleep(delay)
+            throttle.sleep(delay)
     raise RuntimeError(f"Error fetching page {url}: {last_error}")
 
 

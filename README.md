@@ -2,7 +2,7 @@
 
 # E-Hentai Downloader
 
-> A Python tool to download E-Hentai, ExHentai and nhentai galleries, with a simple desktop GUI, a command-line interface and a [Docker version with a web interface](docker/README.md).
+> A Python tool to download E-Hentai, ExHentai, nhentai and hitomi galleries, with a simple desktop GUI, a command-line interface and a [Docker version with a web interface](docker/README.md).
 
 <p align="center">
   <img src="assets/screenshots/batch.png" alt="Batch Download tab: the queue in columns, with site logo, favorite tag, pages and title" width="49%">
@@ -17,15 +17,13 @@
 
 ---
 
-## What's new in 2.1.0
+## What's new in 2.2.0
 
-- 📊 **Statistics tab** (desktop and web): galleries, images, size and speed since the first start and for this session, split by E-Hentai / ExHentai / nhentai, plus the **most downloaded tags**.
-- 🏷️ **Favorite tags** (*Settings → Favorite tags…*): they stand out in the lists, and with *Sort downloads into folders by favorite tag* galleries go into `<site>/<tag>/` (e.g. `E-Hentai/Netorare/`).
-- ↕️ **Queue order**: lines not started yet can be moved (▲ ▼, Alt+Up / Alt+Down, drag and drop on the web page) or removed (✖) while the batch runs.
-- 👀 **Clearer lists, in columns**: `✅ | [site logo] | [ NETORARE ] | 123 | Gallery title` (site, favorite tag in its own colour, pages, title), with the link hidden (still kept for downloads, Retry and the log).
-- 📁 **Download folder** of your choice on the desktop (*Settings → Download folder…*).
-- 🔽 **Minimize to the system tray** (desktop, Windows and Linux): the window hides next to the clock and the downloads go on in the background; closing the window during a download offers the same.
-- 📡 **Internet connection lost**: downloads wait for it to come back instead of failing, and no image is lost.
+- 🌐 **hitomi.la** as a fourth site (desktop, Docker / web and command line): no account or cookies needed, titles as `[Artist] Title`, its own download lane and a **cautious pace** (fewer images at a time, pauses after each image and an extra 45–60 s wait on a *soft ban*) to avoid IP bans.
+- ⏹ **Stop** (the galleries in progress finish, the rest stays in the list) and ✖ **Cancel** (everything stops at once, after a confirmation), on desktop, web and in the tray menu.
+- 🪟 **One window only** (desktop): starting the program again brings the open window to the front instead of opening a second copy.
+- ❓ **Confirmation before closing** (desktop) when downloads are running, links are waiting in the batch list or failed downloads are waiting to be retried.
+- 🖱️ **Drag and drop of links anywhere** on the desktop window and on the web page; Pause / Stop / Cancel are now next to the progress bars.
 
 All changes, also of earlier versions: [CHANGELOG.md](CHANGELOG.md).
 
@@ -33,14 +31,14 @@ All changes, also of earlier versions: [CHANGELOG.md](CHANGELOG.md).
 
 ## Features
 
-- 🌐 **Three sites**: E-Hentai, ExHentai and **nhentai.net** (`https://nhentai.net/g/<number>/`). Paste the link as usual: the site is recognised automatically and the album is saved the same way (same formats, renaming, CBZ).
+- 🌐 **Four sites**: E-Hentai, ExHentai, **nhentai.net** (`https://nhentai.net/g/<number>/`) and **hitomi.la** (`https://hitomi.la/galleries/<number>.html`, or the `/doujinshi/…-<number>.html`, `/manga/…`, `/reader/…` links of the same gallery). Paste the link as usual: the site is recognised automatically and the album is saved the same way (same formats, renaming, CBZ).
 - 🎨 **Light, dark or automatic theme** (follows the Windows / macOS / Linux setting), from **Settings → Theme**.
 - 🧭 **Menu bar**: *File* (folders, log, account cookies), *Settings* (Auto Rename, CBZ, download folder, favorite tags, Speed, When done, Theme), *Help* (GitHub, report a problem, disclaimer, license, about).
 - 🐳 **Docker version** with a web interface for a home server ([docker/README.md](docker/README.md)).
 - 🖥️ **Desktop GUI** (Tkinter): single, batch and retry modes, live progress bars and a coloured log. Start it by double-clicking `EHentaiDownloader.pyw`.
-- 🔽 **Background downloads in the system tray** (Windows, Linux): minimize the window and it goes to the tray icon (next to the clock), with *Show*, *Pause / Resume*, *Open Downloads* and *Quit*; the tooltip shows what is downloading and a notification says when the downloads are finished (**Settings → Minimize to system tray**, ON by default). On macOS the window is minimized to the Dock as usual (downloads go on there too).
-- 📥 **Quick link input**: paste text with links (Ctrl+V in the batch list), drag links or text files onto the window, or let the clipboard watcher collect every gallery link you copy.
-- 🗂️ **One folder per site**: `Downloads/E-Hentai/<title>` and `Downloads/nhentai/<title>` (or `.cbz`). Albums and archives made by older versions directly in `Downloads/` are still recognised. The `Downloads` folder itself can be anywhere (**Settings → Download folder…**).
+- 🔽 **Background downloads in the system tray** (Windows, Linux): minimize the window and it goes to the tray icon (next to the clock), with *Show*, *Pause / Resume*, *Stop*, *Cancel*, *Open Downloads* and *Quit*; the tooltip shows what is downloading and a notification says when the downloads are finished (**Settings → Minimize to system tray**, ON by default). On macOS the window is minimized to the Dock as usual (downloads go on there too).
+- 📥 **Quick link input**: paste text with links (Ctrl+V in the batch list), drag links or text files anywhere onto the window (also during a download), or let the clipboard watcher collect every gallery link you copy.
+- 🗂️ **One folder per site**: `Downloads/E-Hentai/<title>`, `Downloads/nhentai/<title>` and `Downloads/hitomi/<title>` (or `.cbz`). Albums and archives made by older versions directly in `Downloads/` are still recognised. The `Downloads` folder itself can be anywhere (**Settings → Download folder…**).
 - 🏷️ **Favorite tags**: the tags of each gallery are read from the site and collected in a list where you tick your favorites (**Settings → Favorite tags…**); they stand out in the lists and, if you want, decide the sub-folder: `Downloads/E-Hentai/Netorare/<title>`.
 - 📊 **Statistics**: galleries, images, size, time and speed (average, peak, now) since the first start and for this session, per site, and the most downloaded tags.
 - 🖼️ **Image format conversion**
@@ -56,11 +54,11 @@ All changes, also of earlier versions: [CHANGELOG.md](CHANGELOG.md).
   - If an image server is broken, another one is requested through the gallery's "reload" link.
   - The 509 "image quota exceeded" placeholder is detected: it is never saved as a page, and the album is queued for retry.
 - ⚡ **Parallel downloads** with an adjustable **speed** (**Settings → Speed**, 1x Very slow … 5x Very fast): it sets the pause between page requests, shared by all threads of the same site, and how many images download at once. One page request per image (the "reload" link is used only when an image server fails).
-- ⏸ **IP-ban pause**: when E-Hentai answers *"This IP address has been temporarily banned … The ban expires in X minutes and Y seconds"*, the ban time is read from the page and every download pauses for that long plus 30–45 s, then resumes the same album (it never skips to the next one). When nhentai answers *Too Many Requests* (HTTP 429) the same pause is used, for the time asked by the site plus a random 10–15 s. The status bar shows a warning with a countdown; after switching IP (e.g. with a VPN) press **Resume now**.
+- ⏸ **IP-ban pause**: when E-Hentai answers *"This IP address has been temporarily banned … The ban expires in X minutes and Y seconds"*, the ban time is read from the page and every download pauses for that long plus 30–45 s, then resumes the same album (it never skips to the next one). When nhentai or hitomi answers *Too Many Requests* (HTTP 429) the same pause is used, only for that site, for the time asked by the site plus a random 10–15 s. The status bar shows a warning with a countdown; after switching IP (e.g. with a VPN) press **Resume now**.
 - 📡 **Internet connection lost**: when a request fails and no site at all can be reached, every download waits (checked every 10 s) instead of failing, and goes on by itself when the connection is back. The gallery that was downloading is then gone through once more (pages already on disk are skipped) so no image is lost; a gallery whose page could not be read during the outage is tried again.
 - ♻️ **Resume**: images already on disk (also from earlier runs or renamed files) are skipped. Every image is first written to a `.part` temp file and renamed only when complete, so an interrupted run can never leave a truncated image that looks finished (leftover `.part` files are deleted on the next run).
 - 📋 **Batch mode** from `URLs.txt` and 🔄 **retry queue** in `failed_downloads.txt`.
-- 🔍 **Link check before downloading**: malformed links (e.g. a token missing a character) are reported before starting; *Verify Links* also checks every gallery online and shows its title, size and the site it will be downloaded from (e-hentai.org, exhentai.org or nhentai.net).
+- 🔍 **Link check before downloading**: malformed links (e.g. a token missing a character) are reported before starting; *Verify Links* also checks every gallery online and shows its title, size and the site it will be downloaded from (e-hentai.org, exhentai.org, nhentai.net or hitomi.la).
 - 🧹 **Duplicate cleanup**: links pointing to the same gallery are detected (by gallery id, even with a different domain or a broken token) and removed after confirmation, keeping the valid link.
 - 🏷️ **Clear lists**: after verification each line shows `✅/❌ [site logo] | FAVORITE TAG | title` (the link stays hidden), and every error and failure summary names the gallery, not just its link. Lines not started yet can be moved or removed while the batch runs.
 - 🗂️ **Log rotation**: `session.log` rotates automatically (`session.log.1` … `session.log.3`).
@@ -137,6 +135,30 @@ The API allows **20 requests per minute per IP** without an account: API request
 
 Only if nhentai ever showed the program a Cloudflare check (*"Just a moment…"*) the log would say so: in that case you can add your browser's `cf_clearance` cookie and User-Agent to an optional `"nhentai"` section of `cookies.json` (see `cookies.example.json`). The User-Agent must be the one of the browser the cookie comes from. nhentai cookies are only sent to nhentai.net, and E-Hentai cookies are never sent to nhentai.
 
+## hitomi (nothing to set up)
+
+hitomi.la galleries work without an account and without cookies. Any link of a gallery is accepted (`/galleries/<number>.html`, `/reader/<number>.html`, `/doujinshi/<title>-<number>.html`, `/manga/…`, `/cg/…`, `/gamecg/…`, `/imageset/…`); search, tag and artist pages are not galleries. Video galleries (*anime*) are reported as such, since they have no images.
+
+The program reads the whole gallery with **one request** (the site's data file `galleries/<number>.js`: title, tags and the list of images), then reads the site's small `gg.js` script, which says on which image server each image is. `gg.js` changes now and then: it is read again every 30 minutes, and at once if an image server refuses an image. If hitomi moves its data servers to another domain, the program finds the new one from a hitomi page by itself (the domain is `HITOMI_CDN_DOMAIN` in `src/config.py`).
+
+**Titles.** hitomi keeps the authors apart from the title, so the program puts them in front of it, as in the E-Hentai and nhentai titles: `[Artist] Title`, or `[Group (Artist)] Title` (more than 3 names become `Various`; names are written with capitals, as the site shows them). For example the folder / CBZ of a gallery by Hiiragi Popura is `[Hiiragi Popura] 彼女と入れ替わった僕は寝取られる.cbz`.
+
+**Formats.** hitomi no longer gives the original files: every image is offered as **WebP**, and usually also as **AVIF** (sometimes **JPEG XL**). The program asks the site for the format chosen in *Image Format* when it has it, so nothing is converted; otherwise it downloads the WebP and converts it. *Native (Original)* saves the WebP as it is. Animated images are WebP only.
+
+hitomi has its own pace and its own pause, like the other sites: its downloads go side by side with E-Hentai and nhentai ones.
+
+**Cautious by default.** hitomi publishes no limits, but it answers *503 Service Unavailable* (or *429 Too Many Requests*) to clients that download too fast. So the program:
+
+- downloads fewer hitomi images at a time than the other sites, with a pause of 1.1–2.5 s after each image:
+
+  | Speed | 1 Very slow | 2 Slow | 3 Normal | 4 Fast | 5 Very fast |
+  | :--- | :---: | :---: | :---: | :---: | :---: |
+  | hitomi images in parallel | 1 | 2 | 2 | 3 | 4 |
+
+- on a 503 / 429 (**soft ban**) **pauses every hitomi download** for the time asked by the site (or 30–60 s for a 503, 60 s for a 429) **plus a random 45–60 s**, to be safe. The log says so (*⚠ hitomi soft ban…*, with the seconds), the status bar shows *Soft ban by hitomi* with a countdown, and with the window in the tray a notification appears. Then the program **asks for the same image again**: it is not counted as failed, and no other format is tried meanwhile. E-Hentai and nhentai downloads go on;
+- after **2 soft bans in the same gallery**, downloads the rest of it **one image at a time**;
+- if the site keeps answering 503 for the same image (5 soft bans), leaves that page to *Retry Failed* and goes on.
+
 > ⚠️ **Never share or commit `cookies.json` / `cookies.txt`**: they give full access to your account. Both are already listed in `.gitignore`.
 
 ---
@@ -160,32 +182,36 @@ python EHentaiDownloader.pyw
 | **Settings → Auto Rename** | ON/OFF: rename images `01…N` when an album is complete. |
 | **Settings → CBZ archive** | ON/OFF: save each completed album as `Downloads/<site>/<gallery title>.cbz` instead of a folder of images. |
 | **Settings → ComicInfo.xml in CBZ** | ON/OFF (default OFF): also put a `ComicInfo.xml` (title, page count, source link) inside each new CBZ, for readers that use it. |
-| **Settings → Download folder…** | Where the finished albums go (default: `Downloads` next to `URLs.txt`); `E-Hentai/` and `nhentai/` are made inside it. *Use the default download folder* goes back to `Downloads`. Albums still downloading stay in `temp/`. |
+| **Settings → Download folder…** | Where the finished albums go (default: `Downloads` next to `URLs.txt`); `E-Hentai/`, `nhentai/` and `hitomi/` are made inside it. *Use the default download folder* goes back to `Downloads`. Albums still downloading stay in `temp/`. |
 | **Settings → Favorite tags…** | List of the tags met in your galleries, with a selector (☐ / ★) next to each one: tick the ones to highlight. The list **fills up as you verify or download galleries** (their tags are saved in `tags.json`, with how many galleries had them); before the first downloads it offers only a few common tags ("suggested"), and you can add any tag by hand (also `artist:name`). Each favorite has a label (shown in capitals, at most 20 characters, also the folder name), **its own colour** (*Colour…*) and a priority (▲ ▼): when a gallery has more than one favorite, the highest wins. The tags of every gallery are remembered, so the lists follow a new priority also after a restart. A favorite matches the tag on every site; `female:big breasts` matches that namespace only. |
 | **Settings → Sort downloads into folders by favorite tag** | ON/OFF (default OFF): a gallery with a favorite tag goes into `Downloads/<site>/<label>/<title>`, the others stay in `Downloads/<site>/`. |
 | **Settings → Watch clipboard for links** | ON/OFF (default OFF): every gallery link you copy (also several at once, inside any text) is added to the batch list, skipping galleries already listed. Links copied before you turn it on are ignored. |
-| **Settings → Minimize to system tray** | ON/OFF (default ON; Windows and Linux): minimizing the window hides it in the system tray (next to the clock) and the downloads go on in the background. Click the tray icon (or *Show EHentai Downloader* in its menu) to bring the window back; the menu also has *Pause / Resume downloads*, *Open Downloads* and *Quit*. The tooltip shows what is downloading, and a notification says when the downloads are finished. Closing the window while a download runs asks: *Yes* keeps downloading in the tray, *No* stops and closes. Greyed out on macOS (the window goes to the Dock as usual) or when `pystray` / a system tray is missing. |
+| **Settings → Minimize to system tray** | ON/OFF (default ON; Windows and Linux): minimizing the window hides it in the system tray (next to the clock) and the downloads go on in the background. Click the tray icon (or *Show EHentai Downloader* in its menu) to bring the window back; the menu also has *Pause / Resume downloads*, *Stop after the current galleries*, *Cancel all downloads…*, *Open Downloads* and *Quit*. The tooltip shows what is downloading, and a notification says when the downloads are finished. Closing the window while a download runs asks: *Yes* keeps downloading in the tray, *No* stops and closes (see *Closing the program* below). Greyed out on macOS (the window goes to the Dock as usual) or when `pystray` / a system tray is missing. |
 | **Settings → Speed** | 1x Very slow … 5x Very fast (default 3x Normal), also shown bottom right (click it to change). Lower it if you get temporary IP bans. The request pace changes at once, the number of parallel downloads from the next album. |
 | **Settings → Theme** | *Automatic (system)*, *Light* or *Dark*; the window changes at once. *Automatic* follows the system setting (checked every minute). |
 | **Help** menu | GitHub page, *Report a problem* (GitHub issues), *Check for updates now*, *Check for updates at start-up* (ON by default, at most once a day: one request to the GitHub API, nothing is downloaded or installed), *Disclaimer*, *License* (GPL-3.0 and third-party software), *About*. |
+| *One window only* | The program runs **once per data folder**: starting it again (double-click, Start menu, shortcut) does not open a second copy, it brings the open window to the front, also when it is hidden in the system tray. The lock (`.instance.lock`) is released by the system when the program ends, even after a crash. |
+| *Closing the program* | Window ✕, *File → Exit* and the tray's *Quit* ask for a confirmation when something is left to do: downloads in progress (also paused), links waiting in the batch list or failed downloads to retry; the dialog lists them. The lists are always saved and come back at the next start. With nothing pending the program closes at once; *When done → Close program* never asks. |
 | *Start-up notice* | At start the program shows the disclaimer (no warranty, use at your own risk, may stop working, developed with the help of Claude AI). *Decline and exit* closes the program; *Don't show this again for 30 days* hides it for a month (`DISCLAIMER_SNOOZE_DAYS`). |
-| **Pause / Resume** | Next to *Start Batch*, active while a download runs: no new request starts (images already being received finish), freeing the bandwidth. On pause `URLs.txt` is saved and the album in progress stays in `temp/`, so you can also close the program (no confirmation asked) or shut down the PC: the next *Start Batch* resumes from that album, skipping the pages already on disk. |
+| **Pause / Resume** | At the right of the progress bars, active while a download runs: no new request starts (images already being received finish), freeing the bandwidth. On pause `URLs.txt` is saved and the album in progress stays in `temp/`, so you can also close the program (after the usual confirmation) or shut down the PC: the next *Start Batch* resumes from that album, skipping the pages already on disk. |
+| **Stop** | Under *Pause*: the galleries already downloading finish, then the download ends. The links not started yet stay in the batch list (in the retry queue for *Retry Failed*) for the next start. During *Verify Links* it stops after the current link. |
+| **Cancel** | Under *Stop*, after a confirmation: every download stops at once (even while paused or waiting for a ban), the galleries in progress are interrupted, the `temp/` folder is emptied (partial galleries of earlier sessions too) and both the batch list (`URLs.txt`) and *Retry Failed* (`failed_downloads.txt`) are emptied. Completed galleries stay in the download folder; the *When done* action is skipped. |
 | **When done** | Bottom right, and in **Settings → When done**: *Do nothing*, *Close program* or *Shut down PC* when all downloads are finished (handy for a list left running overnight). A 60 s countdown lets you cancel; the list and settings are saved first. You can change it while a download runs. It always starts as *Do nothing* (never remembered, so the PC is not switched off by surprise next time). |
 | **Resume now** | Appears in the status bar during a temporary IP ban: stop waiting after you changed IP (VPN). If the ban is still active the pause simply starts again. |
 | *Remembered settings* | Image Format, Auto Rename, CBZ archive, ComicInfo.xml, download folder, favorite tags, folders by tag, clipboard watcher, system tray, update check, Speed, Theme and the start-up notice choice are saved in `settings.json` as soon as you change them and restored at the next start (delete the file to go back to the `src/config.py` defaults). |
-| **Open Downloads** | Button on the right of the tab bar (always visible, also in *File*): opens the `Downloads` folder (with the `E-Hentai` and `nhentai` sub-folders). |
+| **Open Downloads** | Button on the right of the tab bar (always visible, also in *File*): opens the `Downloads` folder (with the `E-Hentai`, `nhentai` and `hitomi` sub-folders). |
 | **Single Download** tab | Paste one gallery URL and press *Start Download*. If *Paste* finds several links in the clipboard, it offers to add all of them to the batch list. |
-| **Batch Download** tab | Editor for `URLs.txt`: one URL per line, lines starting with `#` are skipped. **Ctrl+V** keeps only the gallery links of the copied text (a whole web page or message is fine) and adds those not already listed; you can also **drag** links, text or `.txt` files onto the window. *Start Batch* first checks for duplicates and malformed links. The list is saved automatically every few seconds; while the batch runs you can keep adding links at the bottom and they are queued too. Links never verified are checked online in parallel with the download (unreadable ones are skipped and go to *Retry Failed*). **E-Hentai / ExHentai and nhentai links download side by side**: they are different servers with their own limits, so the batch keeps one gallery of each site going at the same time (galleries of the same site still go one after another). *Retry Failed* works the same way. Downloaded lines turn green and disappear after ~45 s; *Clear All* asks for confirmation. |
+| **Batch Download** tab | Editor for `URLs.txt`: one URL per line, lines starting with `#` are skipped. **Ctrl+V** keeps only the gallery links of the copied text (a whole web page or message is fine) and adds those not already listed; you can also **drag** links, text or `.txt` files onto the window. *Start Batch* first checks for duplicates and malformed links. The list is saved automatically every few seconds; while the batch runs you can keep adding links at the bottom and they are queued too. Links never verified are checked online in parallel with the download (unreadable ones are skipped and go to *Retry Failed*). **E-Hentai / ExHentai, nhentai and hitomi links download side by side**: they are different servers with their own limits, so the batch keeps one gallery of each site going at the same time (galleries of the same site still go one after another). *Retry Failed* works the same way. Downloaded lines turn green and disappear after ~45 s; *Clear All* asks for confirmation. |
 | **▲ ▼ ✖** (right of the list) | Move up / down or remove the line with the cursor (also **Alt+Up**, **Alt+Down**, **Ctrl+Delete**). Lines not started yet can be moved and removed also while the batch runs: each site downloads its galleries in the order of the list, removed lines are skipped. A gallery already downloading can't be moved or removed. |
 | **Duplicates** button | Finds links to the same gallery and, after confirmation, keeps one link per gallery. |
-| **Verify Links** button | Checks every link online without downloading: title, number of images, tags and source site (e-hentai.org / exhentai.org / nhentai.net). Rewrites each line (see [Link lists format](#link-lists-format)), then **sorts the list**: E-Hentai / ExHentai galleries first, then nhentai, and in each group the galleries with fewer images first (links with problems at the bottom of their group). The list is sorted the same way when *Start Batch* is pressed: each site then goes down the list line by line, so the list does not jump up and down while it downloads. Lines moved by hand while the batch runs keep their place. |
+| **Verify Links** button | Checks every link online without downloading: title, number of images, tags and source site (e-hentai.org / exhentai.org / nhentai.net / hitomi.la). Rewrites each line (see [Link lists format](#link-lists-format)), then **sorts the list**: E-Hentai / ExHentai galleries first, then nhentai, then hitomi, and in each group the galleries with fewer images first (links with problems at the bottom of their group). The list is sorted the same way when *Start Batch* is pressed: each site then goes down the list line by line, so the list does not jump up and down while it downloads. Lines moved by hand while the batch runs keep their place. |
 | **Retry Failed** tab | Albums from `failed_downloads.txt`, in the same column format; press *Retry Failed* to try them again. |
-| **Statistics** tab | Since the first start (`stats.json`) and this session: galleries · images, size and time downloading, average and peak speed, the same per site (E-Hentai, ExHentai, nhentai), and the most downloaded tags. *Reset* starts again from zero. The speed right now is also in the status bar. |
+| **Statistics** tab | Since the first start (`stats.json`) and this session: galleries · images, size and time downloading, average and peak speed, the same per site (E-Hentai, ExHentai, nhentai, hitomi), and the most downloaded tags. *Reset* starts again from zero. The speed right now is also in the status bar. |
 | **Log** | Live events; *Open Log File* opens `session.log`. |
 
 ### 2. Command line (optional, legacy)
 
-A minimal mode without a window, kept for whoever wants it (scripts, servers without a desktop). It downloads from **E-Hentai, ExHentai and nhentai** exactly like the GUI, with the same files and settings, but it has none of the GUI tools (menus, Account & cookies window, pause, live speed change): settings come from `src/config.py` and `cookies.json`, and the speed is `DEFAULT_SPEED`. New features are developed for the GUI first.
+A minimal mode without a window, kept for whoever wants it (scripts, servers without a desktop). It downloads from **E-Hentai, ExHentai, nhentai and hitomi** exactly like the GUI, with the same files and settings, but it has none of the GUI tools (menus, Account & cookies window, pause, live speed change): settings come from `src/config.py` and `cookies.json`, and the speed is `DEFAULT_SPEED`. New features are developed for the GUI first.
 
 Run these from the project folder (the one with `EHentaiDownloader.pyw`):
 
@@ -219,6 +245,7 @@ In the batch editor (and `URLs.txt`) just paste **one link per line**. After **V
 ```text
 ✅ EHENTAI  |               |  35 | [MeowWithMe] To Love Ru: Double Trouble | https://e-hentai.org/g/1908257/7261eadc3e/
 ✅ NHENTAI  |   NETORARE    | 123 | [Spiral] Musume no Tomodachi… | https://nhentai.net/g/694850/
+✅ HITOMI   |               |  28 | Another title | https://hitomi.la/galleries/3105447.html
 ❌ EXHENTAI |               |   - | https://exhentai.org/g/4077626/00cb5bea6/ — invalid link | https://exhentai.org/g/4077626/00cb5bea6/
 ```
 
@@ -227,7 +254,7 @@ In the window the same lines read `✅ [logo] | [ NETORARE ] | 123 | [Spiral] Mu
 | Column | Meaning |
 | :--- | :--- |
 | `✅` / `❌` | Whether the gallery page could be read with this link |
-| Site | `EHENTAI`, `EXHENTAI` or `NHENTAI` (shown as a logo) |
+| Site | `EHENTAI`, `EXHENTAI`, `NHENTAI` or `HITOMI` (shown as a logo) |
 | Tag | The [favorite tag](#1-gui-recommended) of the gallery with the highest priority (blank if none); the column is as wide as the longest favorite label |
 | `123` | Number of images (pages) of the gallery (`-` when unknown) |
 | Title | Gallery title; for `❌` lines the link followed by a short reason |
@@ -235,7 +262,7 @@ In the window the same lines read `✅ [logo] | [ NETORARE ] | 123 | [Spiral] Mu
 
 The same format is used in the *Retry Failed* list and in `failed_downloads.txt`. Lines starting with `#` are ignored; bare links and the older `GOOD | 35 | title | link` and `URL  # title` forms are still accepted (table lines are rewritten in the current form).
 
-The site logos are original badges in `assets/sites/`. To use other images, put `ehentai.png`, `exhentai.png` and `nhentai.png` (4:1, e.g. 160×40) in a `logos/` folder next to `URLs.txt` (Docker: `/config/logos/`).
+The site logos are original badges in `assets/sites/`. To use other images, put `ehentai.png`, `exhentai.png`, `nhentai.png` and `hitomi.png` (4:1, e.g. 160×40) in a `logos/` folder next to `URLs.txt` (Docker: `/config/logos/`).
 
 A gallery link always ends with a **10-character token** (`/g/<number>/<token>/`). If a character is lost while copying, the site answers *"Key missing, or incorrect key provided"*: the program now detects this before downloading.
 
@@ -245,7 +272,7 @@ A gallery link always ends with a **10-character token** (`/g/<number>/<token>/`
 
 | Mode | Result | Animations |
 | :--- | :--- | :---: |
-| **Native (Original)** | Each image saved exactly as the server sends it (`.webp`, `.jpg`, `.png`, `.gif`…), without any change. | ✅ kept as they are |
+| **Native (Original)** | Each image saved exactly as the server sends it (`.webp`, `.jpg`, `.png`, `.gif`…), without any change. hitomi only sends WebP (see [hitomi](#hitomi-nothing-to-set-up)). | ✅ kept as they are |
 | **WEBP** (default) | Everything converted to WebP: small files, read everywhere. | ✅ animated WebP, same timing |
 | **JPEG** | Everything converted to JPEG (`.jpg`). | ❌ first frame only |
 | **JPEG XL** | Everything converted to JPEG XL (`.jxl`). | ❌ first frame only ¹ |
@@ -282,8 +309,8 @@ The archive for your system is written to `release/` (PyInstaller can only build
 **Publishing a release** (maintainers): set `APP_VERSION` in `src/config.py`, add a section to `CHANGELOG.md`, commit, then push a tag with the same version:
 
 ```bash
-git tag v2.1.0
-git push origin v2.1.0
+git tag v2.2.0
+git push origin v2.2.0
 ```
 
 The GitHub workflow `.github/workflows/release.yml` builds Windows, macOS (Apple Silicon and Intel) and Linux on GitHub's servers and attaches the four archives to a new release with generated notes. *Actions → Build release → Run workflow* makes a test build without publishing (the archives can be downloaded from the run page).
@@ -318,6 +345,16 @@ All settings are in [`src/config.py`](src/config.py):
 | `DISCLAIMER_SNOOZE_DAYS` | `30` | Days the start-up notice stays hidden after *Don't show this again*. |
 | `NHENTAI_MAX_MIRRORS` | `4` | nhentai mirrors tried per image before it is marked as failed. |
 | `NHENTAI_IMAGE_DELAY` | `(0.4, 1.2)` | Random pause (seconds) after each nhentai image, per download thread. |
+| `HITOMI_CDN_DOMAIN` | `gold-usergeneratedcontent.net` | Domain of hitomi's data and image servers (found again by itself from a hitomi page if the site moves). |
+| `HITOMI_GG_MAX_AGE` | `1800` | Seconds hitomi's `gg.js` (where each image is) is kept before reading it again. |
+| `HITOMI_DATA_INTERVAL` | `1.0` | Minimum seconds between hitomi data requests (gallery data, `gg.js`). |
+| `HITOMI_IMAGE_DELAY` | `(1.1, 2.5)` | Random pause (seconds) after each hitomi image, per download thread. |
+| `HITOMI_WORKERS` | `{1: 1, 2: 2, 3: 2, 4: 3, 5: 4}` | hitomi images downloaded at the same time for each Speed level. |
+| `HITOMI_SLOWDOWN_WAIT` | `(30, 60)` | Wait (random seconds) when hitomi answers 503 without saying how long. |
+| `HITOMI_BLOCK_DEFAULT_WAIT` | `60` | Wait when hitomi answers 429 without saying how long. |
+| `HITOMI_SOFTBAN_EXTRA_WAIT` | `(45, 60)` | Random extra seconds added to every hitomi soft ban (503 / 429). |
+| `HITOMI_SLOWDOWN_LIMIT` | `2` | Soft bans in one gallery after which the rest of it goes one image at a time. |
+| `HITOMI_SLOWDOWN_TRIES` | `5` | Soft bans waited for the same image before it goes to *Retry Failed*. |
 | `CONNECTION_TIMEOUT` | `30` | Network timeout in seconds. |
 | `RATE_LIMIT_SLEEPING_TIME` | `60` | Wait in seconds after a rate-limit response. |
 | `BAN_EXTRA_WAIT` | `(30, 45)` | Extra random seconds waited after a temporary IP ban expires. |
@@ -333,9 +370,9 @@ All settings are in [`src/config.py`](src/config.py):
 1. The link is checked (format), then the gallery page is read to get the title, the number of images and the list of gallery pages. If the requested site does not answer correctly, the other one (e-hentai.org ↔ exhentai.org) is tried; the log line `Source` says which one is used.
 2. For every image page, the direct image link is taken from the image viewer page.
 3. Images are downloaded in parallel into `temp/<album>/`, converted if needed, and saved as `NN_originalname.ext` while the album is in progress (each one through a `.part` temp file).
-4. When nothing failed and every page is on disk, the images are renamed `01…N` (if enabled) and the album is moved to `Downloads/E-Hentai/<clean gallery title>` (`Downloads/nhentai/…` for nhentai). With **CBZ archive** ON, the images are instead packed straight from `temp/` into `Downloads/<site>/<clean gallery title>.cbz` and the temp folder is removed. Names follow the same rules on every system (characters not allowed on Windows become `_`, at most 255 bytes), so the `Downloads` folder can be copied anywhere.
+4. When nothing failed and every page is on disk, the images are renamed `01…N` (if enabled) and the album is moved to `Downloads/E-Hentai/<clean gallery title>` (`Downloads/nhentai/…` for nhentai, `Downloads/hitomi/…` for hitomi). With **CBZ archive** ON, the images are instead packed straight from `temp/` into `Downloads/<site>/<clean gallery title>.cbz` and the temp folder is removed. Names follow the same rules on every system (characters not allowed on Windows become `_`, at most 255 bytes), so the `Downloads` folder can be copied anywhere.
 
-nhentai galleries work the same way, except steps 1–2: title, tags and the image path of every page come from a single request (API v2, or the gallery page as a fallback), so no per-image page is loaded; each image is taken directly from an image server (another mirror, or another file type if the site's one is wrong, is tried on failure).
+nhentai galleries work the same way, except steps 1–2: title, tags and the image path of every page come from a single request (API v2, or the gallery page as a fallback), so no per-image page is loaded; each image is taken directly from an image server (another mirror, or another file type if the site's one is wrong, is tried on failure). hitomi galleries are read the same way (one request for the gallery data, plus `gg.js` for the image addresses).
 
 5. Albums with missing images stay in `temp/` and are written to `failed_downloads.txt` for a later retry; images already downloaded are not downloaded again.
 
@@ -347,13 +384,18 @@ nhentai galleries work the same way, except steps 1–2: title, tags and the ima
 | :--- | :--- |
 | `Image limit … 509` | Your E-Hentai image quota is exhausted. Wait (or reset it from your account), then use *Retry Failed*. |
 | `cookies rejected … igneous=mystery` / `Sad Panda` | ExHentai cookies missing, expired or wrong: update `cookies.json`. |
-| `IP temporarily banned by E-Hentai … Downloads paused` | Too many requests. Nothing to do: E-Hentai downloads resume by themselves when the ban ends (+30–45 s); nhentai downloads in the same batch go on. Lower the **Speed** to avoid it, or switch IP with a VPN and press **Resume now**. |
+| `IP temporarily banned by E-Hentai … Downloads paused` | Too many requests. Nothing to do: E-Hentai downloads resume by themselves when the ban ends (+30–45 s); nhentai and hitomi downloads in the same batch go on. Lower the **Speed** to avoid it, or switch IP with a VPN and press **Resume now**. |
 | `CBZ failed` / `CBZ skipped` | The archive could not be written or verified (or pages were duplicated): the album is saved as a normal folder instead, nothing is lost. |
 | `Rename skipped` | Some pages were missing or duplicated on disk, so images were left with their download names. |
 | `Invalid gallery URL … token` / `Key missing, or incorrect key provided` | The link is incomplete or mistyped: copy it again from the browser. |
 | `Too many requests: blocked for a while by nhentai` | nhentai asked to slow down (HTTP 429): nhentai downloads pause for the time asked plus 10–15 s (E-Hentai ones go on), with a countdown in the status bar, then continues by itself. Lower the **Speed**, or switch IP with a VPN and press **Resume now**. |
 | `Cloudflare browser check` (nhentai) | nhentai asked for a browser check: add `cf_clearance` and `user_agent` to the `"nhentai"` section of `cookies.json` (see *nhentai* above). |
 | `gallery … does not exist or was removed from nhentai` | Wrong gallery number, or the gallery was deleted. |
+| `⚠ hitomi soft ban (HTTP 503 …)` / `Soft ban by hitomi` | hitomi answered 503 or 429: only hitomi downloads pause (the time asked, or 30–60 s, plus 45–60 s extra), then the same images are asked again. After two soft bans the gallery goes on one image at a time. Nothing to do; if it happens often, lower the **Speed**. |
+| `gallery … does not exist or was removed from hitomi` | Wrong gallery number, or the gallery was deleted. |
+| `this hitomi gallery is an anime (video)` | Video galleries have no images: they can't be downloaded. |
+| `Invalid hitomi URL` | The link is a search, tag or artist page: open the gallery and copy its link. |
+| `the image server refused it, reading gg.js again` (hitomi) | The site changed its image addresses: the program reads them again and goes on by itself. If a page still fails, *Retry Failed* later. |
 | `exhentai.org did not answer correctly, using e-hentai.org` | ExHentai is down or your cookies are not valid: the gallery is downloaded from e-hentai.org instead (only works for galleries that exist there). |
 
 ---
@@ -384,8 +426,9 @@ EHentaiDownloader/
     ├── general_utils.py     # HTTP session, cookies, page fetching with retries & diagnostics
     ├── image_formats.py     # Image Format choices, default (WebP) and their notices
     ├── nhentai.py           # nhentai: link check, gallery data (API v2 / page), image servers
+    ├── hitomi.py            # hitomi: link check, gallery data, gg.js, image addresses
     ├── throttle.py          # Speed levels (request pacing) and temporary IP-ban / rate-limit pause
-    ├── tags.py              # Gallery tags (E-Hentai page / nhentai data), favorite tags, tag folders
+    ├── tags.py              # Gallery tags (E-Hentai page / nhentai / hitomi data), favorite tags, tag folders
     ├── stats.py             # Download statistics (stats.json), speeds
     ├── paths.py             # Data folder and bundled files (source code or packaged app)
     ├── ui_theme.py          # Light / dark / automatic theme, platform fonts
@@ -402,6 +445,7 @@ EHentaiDownloader/
     │   ├── workers.py       # Background download / link-check threads
     │   ├── when_done.py     # End-of-download summary, close / shut down, exit
     │   ├── tray.py          # System tray icon: minimize to tray, background downloads
+    │   ├── single_instance.py # Only one copy at a time; a second start shows the open window
     │   ├── updates.py       # Update check (Help menu)
     │   ├── live_manager.py  # Progress / log messages from the threads to the window
     │   └── style.py         # Colours, fonts, small widget helpers
@@ -412,6 +456,7 @@ EHentaiDownloader/
     ├── downloader/
     │   ├── album_downloader.py  # Download, conversion, completeness check, renaming
     │   ├── nhentai_downloader.py # Same, for nhentai galleries
+    │   ├── hitomi_downloader.py  # Same, for hitomi galleries
     │   └── download_utils.py    # Image requests with retries and backoff
     ├── web/                 # Web interface (Docker): engine.py (lists, threads), server.py (API), static/ (page)
     └── managers/            # Rich terminal display used by the CLI

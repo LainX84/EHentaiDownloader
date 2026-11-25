@@ -1,4 +1,4 @@
-"""Gallery tags: reading them from E-Hentai / ExHentai pages and nhentai data, favorite tags.
+"""Gallery tags: reading them from E-Hentai / ExHentai pages, nhentai and hitomi data, favorite tags.
 
 The tags met in verified or downloaded galleries are remembered in tags.json (name and how
 many galleries had it): the favorite tags window lists them, with a selector next to each one.
@@ -6,6 +6,7 @@ many galleries had it): the favorite tags window lists them, with a selector nex
 Tags are kept as "namespace:name" strings, lower case, single spaces:
     E-Hentai / ExHentai   "female:big breasts", "other:ai generated", "language:english"
     nhentai               "tag:netorare", "artist:...", "language:english"
+    hitomi                "female:big breasts", "male:...", "tag:full color", "artist:...", "language:english"
 
 Favorite tags (Settings → Favorite tags…) are a list of {"tag": ..., "label": ...}; the
 first favorite (in list order) found in a gallery is its "badge": shown in the lists and,
@@ -90,6 +91,14 @@ def from_ehentai_soup(soup) -> list[str]:
 
 def from_nhentai_info(info: dict) -> list[str]:
     """Tags of an nhentai gallery (the data of src.nhentai.fetch_gallery_info)."""
+    tags = info.get("all_tags")
+    if isinstance(tags, list) and tags:
+        return _unique(normalize(tag) for tag in tags)
+    return _unique(normalize(f"tag:{name}") for name in info.get("tags", []) or [])
+
+
+def from_hitomi_info(info: dict) -> list[str]:
+    """Tags of a hitomi gallery (the data of src.hitomi.fetch_gallery_info)."""
     tags = info.get("all_tags")
     if isinstance(tags, list) and tags:
         return _unique(normalize(tag) for tag in tags)

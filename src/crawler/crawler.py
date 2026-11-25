@@ -6,12 +6,12 @@ extracting image links, and handling reloaded pages.
 
 import random
 import re
-import time
 from urllib.parse import urlparse
 
 from bs4 import BeautifulSoup
 from requests import Session
 
+from src import throttle
 from src.config import ALBUM_PAGE_DELAY
 from src.general_utils import fetch_page
 from src.managers.live_manager import LiveManager
@@ -144,7 +144,7 @@ class Crawler:
         album_pages_soups = [self.initial_soup]
         for album_page in self.album_pages:
             # Short courtesy pause so large galleries don't burst dozens of requests
-            time.sleep(random.uniform(*ALBUM_PAGE_DELAY))  # noqa: S311
+            throttle.sleep(random.uniform(*ALBUM_PAGE_DELAY))  # noqa: S311
             album_pages_soups.append(
                 fetch_page(album_page, session=self.session, referer=self.url),
             )

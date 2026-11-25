@@ -1,6 +1,6 @@
 """CBZ (comic book archive) creation, shared by every album downloader.
 
-AlbumDownloader (and NHentaiAlbumDownloader) inherit these methods. They use these
+AlbumDownloader (and NHentaiAlbumDownloader, HitomiAlbumDownloader) inherit these methods. They use these
 attributes of the downloader: album_name, clean_album_name, total_images, url,
 download_path, extra_info, live_manager, site_download_folder, and its _scan_local_pages /
 _part_path / _discard helpers.

@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import random
 import threading
-import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests
@@ -149,7 +148,7 @@ class NHentaiAlbumDownloader(AlbumDownloader):
                     continue
                 last_error = err
                 if attempt < IMAGE_FETCH_RETRIES - 1:
-                    time.sleep(2 ** (attempt + 1) + random.uniform(0.5, 1.5))  # noqa: S311
+                    throttle.sleep(2 ** (attempt + 1) + random.uniform(0.5, 1.5))  # noqa: S311
         raise requests.RequestException(str(last_error or "download failed"))
 
     def _fetch_page_image(self, page_number: int) -> tuple[requests.Response | None, str]:
@@ -245,7 +244,7 @@ class NHentaiAlbumDownloader(AlbumDownloader):
             stats.add_image("nhentai")
             self.images_downloaded += 1
             _mark_done()
-            time.sleep(random.uniform(*NHENTAI_IMAGE_DELAY))  # noqa: S311
+            throttle.sleep(random.uniform(*NHENTAI_IMAGE_DELAY))  # noqa: S311
 
         workers = max(1, min(MAX_WORKERS, throttle.current_workers()))
         self.live_manager.update_log("Speed", f"Speed: {throttle.speed_name()} ({workers} parallel download(s)).")

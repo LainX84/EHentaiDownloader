@@ -41,6 +41,11 @@ class TextBody(BaseModel):
     text: str = ""
 
 
+class AddLinksBody(TextBody):
+    """Text with gallery links, and how it arrived (shown in the log)."""
+    source: str = "Paste"
+
+
 class StartBody(BaseModel):
     """Options of Start Batch / Verify Links chosen in the confirmations."""
     remove_duplicates: bool = False
@@ -155,6 +160,16 @@ def create_app(data_dir: Path, config_dir: Path) -> FastAPI:
     def pause() -> dict:
         return {"paused": run(engine.toggle_pause)}
 
+    @app.post("/api/stop")
+    def stop() -> dict:
+        run(engine.request_stop)
+        return {"ok": True}
+
+    @app.post("/api/cancel")
+    def cancel() -> dict:
+        run(engine.request_cancel)
+        return {"ok": True}
+
     @app.post("/api/resume-ban")
     def resume_ban() -> dict:
         engine.resume_after_ban()
@@ -162,8 +177,8 @@ def create_app(data_dir: Path, config_dir: Path) -> FastAPI:
 
     # batch list
     @app.post("/api/batch/add")
-    def batch_add(body: TextBody) -> dict:
-        return run(engine.add_links, body.text, "Paste")
+    def batch_add(body: AddLinksBody) -> dict:
+        return run(engine.add_links, body.text, "Drop" if body.source == "Drop" else "Paste")
 
     @app.post("/api/batch/text")
     def batch_text(body: TextBody) -> dict:
@@ -229,7 +244,8 @@ def create_app(data_dir: Path, config_dir: Path) -> FastAPI:
     @app.get("/sitelogo/{site}")
     def site_logo(site: str) -> FileResponse:
         """Logo of a site: <config>/logos/<site>.png of the user if present, else the bundled one."""
-        name = {"EHENTAI": "ehentai.png", "EXHENTAI": "exhentai.png", "NHENTAI": "nhentai.png"}.get(site.upper())
+        name = {"EHENTAI": "ehentai.png", "EXHENTAI": "exhentai.png", "NHENTAI": "nhentai.png",
+                "HITOMI": "hitomi.png"}.get(site.upper())
         if not name:
             raise HTTPException(status_code=404, detail="Unknown site.")
         for candidate in (config_dir / "logos" / name, paths.resource(f"assets/sites/{name}")):

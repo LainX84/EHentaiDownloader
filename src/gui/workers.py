@@ -1,6 +1,6 @@
 """Background threads: single, batch, link check and retry downloads.
 
-Batch and retry run one lane per site (E-Hentai / ExHentai and nhentai) at the same time.
+Batch and retry run one lane per site (E-Hentai / ExHentai, nhentai and hitomi) at the same time.
 """
 
 # pylint: disable=protected-access,too-many-lines
@@ -25,12 +25,21 @@ from src.gui.style import (
 class WorkersMixin:  # pylint: disable=too-few-public-methods,no-member
     """Background threads: single, batch, link check and retry downloads. Mixed into EHentaiGUI."""
 
-    def _begin_download(self, editor_editable: bool = False) -> None:
-        """Reset progress bars and log, and lock the controls."""
+    def _begin_download(self, editor_editable: bool = False, mode: str = "single") -> None:
+        """Reset progress bars and log, and lock the controls.
+
+        mode is "single", "batch", "retry" or "verify" (Cancel is not offered for a link check).
+        """
         self._running = True
+        self._run_mode = mode
+        self._stop_requested = False
+        self._cancel_requested = False
         self._set_buttons_state("disabled", editor_editable=editor_editable)
         throttle.set_paused(False)
+        throttle.clear_cancel()
         self._pause_btn.configure(state="normal", text="⏸  Pause")
+        self._stop_btn.configure(state="normal")
+        self._cancel_btn.configure(state="disabled" if mode == "verify" else "normal")
         self._clear_log()
         self._bar1["value"] = 0
         self._bar1_pct.configure(text="0%")
@@ -52,6 +61,8 @@ class WorkersMixin:  # pylint: disable=too-few-public-methods,no-member
             success = ok
             if failed_items or not ok:
                 failed_by_url[url] = failed_items
+        except throttle.DownloadCancelled:
+            pass  # the GUI cleans up when DONE arrives
         except Exception as exc:
             self._q.put(("LOG", _ts(), "ERROR", str(exc)))
             if url:
@@ -61,7 +72,7 @@ class WorkersMixin:  # pylint: disable=too-few-public-methods,no-member
 
     # ------------------------------------------------------------ batch: one lane per site
     #
-    # E-Hentai / ExHentai and nhentai are different servers with their own limits, so the
+    # E-Hentai / ExHentai, nhentai and hitomi are different servers with their own limits, so the
     # batch runs one "lane" (worker thread) per site: a gallery of each site downloads at
     # the same time, while galleries of the same site still go one after another. A lane
     # starts when its first link is queued and stops when its queue is empty; the last
@@ -83,11 +94,13 @@ class WorkersMixin:  # pylint: disable=too-few-public-methods,no-member
         starts the lane again. last is True when no other lane is running: the batch is over.
         """
         lane_queue = self._batch_queues[lane]
-        scanned = threading.Event()
-        self._q.put(("BATCH_SCAN", scanned))
-        scanned.wait(timeout=5)
+        if not (self._stop_requested or self._cancel_requested):
+            scanned = threading.Event()
+            self._q.put(("BATCH_SCAN", scanned))
+            scanned.wait(timeout=5)
         with self._batch_lock:
-            while lane_queue:
+            # Stop / Cancel: no new gallery starts (with Stop the lines stay in the list)
+            while lane_queue and not (self._stop_requested or self._cancel_requested):
                 task = lane_queue.popleft()
                 if self._task_state.get(task["id"]) != "cancelled":
                     return task, False
@@ -107,6 +120,10 @@ class WorkersMixin:  # pylint: disable=too-few-public-methods,no-member
                     return
                 try:
                     self._run_batch_task(task, lane)
+                except throttle.DownloadCancelled:
+                    # Cancel: the gallery stops here (its temp folder is deleted by the GUI)
+                    with self._batch_lock:
+                        self._task_state[task["id"]] = "cancelled"
                 except Exception as exc:  # one gallery must not stop the lane
                     self._q.put(("LOG", _ts(), "ERROR", f"{task['url']}: {exc}"))
                     with self._batch_lock:
@@ -190,7 +207,7 @@ class WorkersMixin:  # pylint: disable=too-few-public-methods,no-member
 
             session = create_session()
             checked = 0
-            while not self._batch_stop.is_set():
+            while not (self._batch_stop.is_set() or self._stop_requested or self._cancel_requested):
                 try:
                     task = self._verify_queue.get(timeout=0.5)
                 except queue.Empty:
@@ -214,6 +231,8 @@ class WorkersMixin:  # pylint: disable=too-few-public-methods,no-member
                     self._q.put(("LOG", _ts(), "Link error", f"{task['url']}: {result['error']}"))
                 if result["domain"]:
                     courtesy_pause()
+        except throttle.DownloadCancelled:
+            pass
         except Exception as exc:
             self._q.put(("LOG", _ts(), "ERROR", f"Link check: {exc}"))
 
@@ -228,6 +247,10 @@ class WorkersMixin:  # pylint: disable=too-few-public-methods,no-member
             session = create_session()
             total = len(entries)
             for idx, (line_no, url, _name) in enumerate(entries):
+                if self._stop_requested or self._cancel_requested:
+                    self._q.put(("LOG", _ts(), "Stopped",
+                                 f"Link check stopped by the user: {total - idx} link(s) not checked."))
+                    break
                 self._q.put(("BATCH_HIGHLIGHT", line_no, idx + 1, total, url))
                 result = verify_gallery(url, session=session)
                 if result["ok"]:
@@ -249,6 +272,8 @@ class WorkersMixin:  # pylint: disable=too-few-public-methods,no-member
                 # Only pause between real requests (malformed links are checked offline)
                 if idx < total - 1 and result["domain"]:
                     courtesy_pause()
+        except throttle.DownloadCancelled:
+            pass
         except Exception as exc:
             self._q.put(("LOG", _ts(), "ERROR", str(exc)))
         finally:
@@ -257,8 +282,8 @@ class WorkersMixin:  # pylint: disable=too-few-public-methods,no-member
     def _run_retry(self, image_format: str = "original", rename: bool = RENAME_SEQUENTIAL, cbz: bool = CREATE_CBZ) -> None:
         """Worker thread: retry every album of the failed queue and keep only those still failing.
 
-        As in the batch, E-Hentai / ExHentai and nhentai albums are retried in two lanes at
-        the same time.
+        As in the batch, E-Hentai / ExHentai, nhentai and hitomi albums are retried in their own
+        lanes at the same time.
         """
         success = True
         failed_by_url: dict[str, list[str]] = {}
@@ -274,7 +299,7 @@ class WorkersMixin:  # pylint: disable=too-few-public-methods,no-member
                 lanes.setdefault(site_lane(url), []).append((idx + 1, url))
 
             progress = BatchProgress(self._q, lambda: total, "Retry Total:")
-            remaining: dict[int, str] = {}
+            remaining: dict[int, str] = {}   # line -> album still failing, or not retried (Stop)
             counter = {"started": 0}
             lock = threading.Lock()
             threads = [
@@ -292,12 +317,15 @@ class WorkersMixin:  # pylint: disable=too-few-public-methods,no-member
                 thread.join()
 
             still_failing = [remaining[line_no] for line_no in sorted(remaining)]
-            success = not still_failing
-            save_failed_urls(still_failing)
+            success = not failed_by_url
+            if not self._cancel_requested:  # after Cancel the GUI empties the list anyway
+                save_failed_urls(still_failing)
 
+            not_retried = len(still_failing) - len(failed_by_url)
             self._q.put((
                 "LOG", _ts(), "Retry completed",
-                f"Processed: {total} | Still failing: {len(still_failing)}",
+                f"Processed: {total - not_retried} | Still failing: {len(failed_by_url)}"
+                + (f" | Not retried (Stop): {not_retried}, still in the queue" if not_retried > 0 else ""),
             ))
 
             self._q.put(("UPDATE_BAR1", 1.0, f"{total}/{total} (100%)"))
@@ -318,7 +346,13 @@ class WorkersMixin:  # pylint: disable=too-few-public-methods,no-member
         from src.cli.downloader import download_album, gallery_name
 
         image_format, rename, cbz = options
-        for line_no, url in items:
+        for pos, (line_no, url) in enumerate(items):
+            if self._stop_requested or self._cancel_requested:
+                # Stop: the albums not tried yet stay in failed_downloads.txt
+                with lock:
+                    for rest_line, rest_url in items[pos:]:
+                        remaining[rest_line] = rest_url
+                return
             with lock:
                 counter["started"] += 1
                 started = counter["started"]
@@ -337,6 +371,11 @@ class WorkersMixin:  # pylint: disable=too-few-public-methods,no-member
                     url, lm, image_format=image_format, rename_sequential=rename,
                     name_hint=gallery_name(url), create_cbz=cbz,
                 )
+            except throttle.DownloadCancelled:
+                with lock:
+                    for rest_line, rest_url in items[pos:]:
+                        remaining[rest_line] = rest_url
+                return
             except Exception as exc:  # one album must not stop the lane
                 self._q.put(("LOG", _ts(), "ERROR", f"{url}: {exc}"))
                 ok, failed_items = False, [str(exc)]
@@ -351,9 +390,11 @@ class WorkersMixin:  # pylint: disable=too-few-public-methods,no-member
 
 
 def site_lane(url: str) -> str:
-    """Download lane of a link: "nhentai" for nhentai.net, "E-Hentai" for everything else."""
-    from src import nhentai
-    return throttle.SITE_NH if nhentai.is_nhentai_url(url or "") else throttle.SITE_EH
+    """Download lane of a link: "nhentai" for nhentai.net, "hitomi" for hitomi.la, "E-Hentai" for the rest."""
+    from src import hitomi, nhentai
+    if nhentai.is_nhentai_url(url or ""):
+        return throttle.SITE_NH
+    return throttle.SITE_HI if hitomi.is_hitomi_url(url or "") else throttle.SITE_EH
 
 
 class BatchProgress:

@@ -18,6 +18,7 @@ TAGS_FILE = "tags.json"        # Tags met in the galleries (listed in Settings �
 # Completed albums go into one sub-folder of DOWNLOAD_FOLDER per site:
 EHENTAI_SUBFOLDER = "E-Hentai"   # galleries from e-hentai.org and exhentai.org
 NHENTAI_SUBFOLDER = "nhentai"    # galleries from nhentai.net
+HITOMI_SUBFOLDER = "hitomi"      # galleries from hitomi.la
 
 # ============================
 # Download Settings
@@ -47,7 +48,7 @@ NHENTAI_BLOCK_EXTRA_WAIT = (10, 15)  # Random extra seconds after the wait asked
 NHENTAI_BLOCK_DEFAULT_WAIT = 60      # Wait used when nhentai does not say how long (no Retry-After).
 NHENTAI_API_INTERVAL = 3.2      # Min. seconds between nhentai API requests (site limit: 20/min per IP).
 NHENTAI_API_INTERVAL_KEY = 1.4  # Same, with an nhentai API key in cookies.json (limit: 45/min per IP).
-APP_VERSION = "2.1.0"           # Shown next to the program name and in Help → About; release tags are v<APP_VERSION>.
+APP_VERSION = "2.2.0"           # Shown next to the program name and in Help → About; release tags are v<APP_VERSION>.
 PROJECT_URL = "https://github.com/LainX84/EHentaiDownloader"
 ISSUES_URL = f"{PROJECT_URL}/issues"
 UPSTREAM_URL = "https://github.com/Lysagxra/EHentaiDownloader"
@@ -55,6 +56,26 @@ DISCLAIMER_SNOOZE_DAYS = 30     # "Don't show again" hides the start-up notice f
 FORMAT_NOTICE_SNOOZE_DAYS = 30  # "Don't show again" hides the notice of an image format for this many days.
 NHENTAI_MAX_MIRRORS = 4         # Mirrors tried per image before giving up on it (until 'Retry Failed').
 NHENTAI_IMAGE_DELAY = (0.4, 1.2)  # Random pause (seconds) after each image, per download thread.
+
+# ============================
+# hitomi.la
+# ============================
+# Domain of hitomi's data and image servers (ltn.<domain> for the gallery data and gg.js,
+# w1/w2/a1/a2.<domain> for the images). If the site moves to another domain, the program
+# finds the new one from a hitomi page by itself; change it here only if that fails.
+HITOMI_CDN_DOMAIN = "gold-usergeneratedcontent.net"
+HITOMI_GG_MAX_AGE = 1800        # Seconds gg.js (where each image is) is kept before reading it again.
+HITOMI_DATA_INTERVAL = 1.0      # Min. seconds between hitomi data requests (gallery info, gg.js).
+HITOMI_BLOCK_DEFAULT_WAIT = 60      # Wait used for a 429 when hitomi does not say how long (no Retry-After).
+HITOMI_SLOWDOWN_WAIT = (30, 60)     # Wait (random seconds) for a 503 "Service Unavailable" without Retry-After.
+HITOMI_SOFTBAN_EXTRA_WAIT = (45, 60)  # Soft ban (503 / 429): random extra seconds added to the wait above
+                                      # (or to the time asked by the site), to be cautious.
+HITOMI_IMAGE_DELAY = (1.1, 2.5)  # Random pause (seconds) after each image, per download thread.
+# Images downloaded in parallel for each Speed level (1 Very slow ... 5 Very fast): hitomi is
+# cautious and uses fewer than the other sites at the higher levels.
+HITOMI_WORKERS = {1: 1, 2: 2, 3: 2, 4: 3, 5: 4}
+HITOMI_SLOWDOWN_LIMIT = 2       # After this many soft bans in one gallery, its images go one at a time.
+HITOMI_SLOWDOWN_TRIES = 5       # Soft bans waited for the same image before it goes to Retry Failed.
 
 # ============================
 # Batch list (GUI)

@@ -77,7 +77,7 @@
 
   <section class="card tab-page" id="tab-single">
     <h2>Single Album Download</h2>
-    <p class="sub">Paste an E-Hentai / ExHentai / nhentai gallery URL and click Start.</p>
+    <p class="sub">Paste an E-Hentai / ExHentai / nhentai / hitomi gallery URL and click Start.</p>
     <div class="row">
       <label for="single-url" class="muted small">Gallery URL</label>
       <input id="single-url" type="text" spellcheck="false" autocomplete="off">
@@ -93,7 +93,7 @@
     <p class="sub">One URL per line, saved automatically. Paste any text with links: only gallery links are kept.<br>
       You can keep adding links while the batch runs; ▲ ▼ or drag a line to change the order, ✕ to remove it (if it has not started yet).</p>
     <div class="add-row">
-      <textarea id="add-text" rows="2" spellcheck="false" placeholder="Paste here any text with gallery links (a page, a message…) and press Add, or Ctrl+V on the list."></textarea>
+      <textarea id="add-text" rows="2" spellcheck="false" placeholder="Paste here any text with gallery links (a page, a message…) and press Add, Ctrl+V on the list, or drag links anywhere onto the page."></textarea>
       <button class="btn accent" id="add-btn">＋ Add</button>
     </div>
     <div id="sort-offer" class="offer hidden">
@@ -114,6 +114,8 @@
       </div>
       <div class="right">
         <button class="btn ghost" id="pause-btn" disabled>⏸ Pause</button>
+        <button class="btn ghost stop-btn" disabled title="Finish the galleries already downloading, then stop (the rest stays in the list)">⏹ Stop</button>
+        <button class="btn ghost cancel-btn" disabled title="Stop everything now: deletes temp/ and empties the batch list and Retry Failed">✖ Cancel</button>
         <button class="btn accent" id="batch-start">▶ Start Batch</button>
       </div>
     </div>
@@ -131,6 +133,8 @@
       </div>
       <div class="right">
         <button class="btn ghost pause-twin" disabled>⏸ Pause</button>
+        <button class="btn ghost stop-btn" disabled title="Finish the albums already downloading, then stop (the rest stays in the queue)">⏹ Stop</button>
+        <button class="btn ghost cancel-btn" disabled title="Stop everything now: deletes temp/ and empties the batch list and Retry Failed">✖ Cancel</button>
         <button class="btn accent" id="retry-start">🔄 Retry Failed</button>
       </div>
     </div>
@@ -180,6 +184,8 @@
   <span id="session" class="muted small"></span>
   <span id="speed-label" class="small"></span>
 </footer>
+
+<div id="drop-hint" class="drop-hint hidden"><div>⬇ Drop here to add the gallery links to the batch list</div></div>
 
 <div id="modal-back" class="modal-back hidden">
   <div class="modal" role="dialog" aria-modal="true">

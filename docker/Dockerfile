@@ -3,7 +3,7 @@
 FROM python:3.13-slim
 
 LABEL org.opencontainers.image.title="EHentai Downloader" \
-      org.opencontainers.image.description="E-Hentai / ExHentai / nhentai gallery downloader with a web interface" \
+      org.opencontainers.image.description="E-Hentai / ExHentai / nhentai / hitomi gallery downloader with a web interface" \
       org.opencontainers.image.source="https://github.com/LainX84/EHentaiDownloader" \
       org.opencontainers.image.documentation="https://github.com/LainX84/EHentaiDownloader/blob/main/docker/README.md" \
       org.opencontainers.image.licenses="GPL-3.0"

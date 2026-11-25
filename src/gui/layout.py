@@ -23,6 +23,7 @@ from src import gui_dialogs, image_formats, paths, throttle, ui_theme
 from src.config import ISSUES_URL, PROJECT_URL
 
 from src.gui import style
+from src.gui.queue_view import _Tooltip
 from src.gui.tray import tray_supported
 from src.gui.style import (
     DIALOG_FONTS, FONT_BTN, FONT_HEAD, FONT_MONO, FONT_MONO_BOLD, FONT_SMALL, FONT_TITLE,
@@ -89,6 +90,15 @@ class LayoutMixin:  # pylint: disable=too-few-public-methods,no-member
               background=[("active", style.TAB_HOVER), ("disabled", style.PANEL)],
               foreground=[("disabled", style.MUTED)])
 
+        # Pause / Stop / Cancel next to the progress bars: smaller, they share the bars' height
+        s.configure("Control.TButton",
+                    background=style.PANEL, foreground=style.ACCENT,
+                    font=FONT_SMALL, padding=(8, 1),
+                    relief="flat", borderwidth=1)
+        s.map("Control.TButton",
+              background=[("active", style.TAB_HOVER), ("disabled", style.BG)],
+              foreground=[("disabled", style.MUTED)])
+
         s.configure("Danger.TButton",
                     background=style.ERROR, foreground=style.ON_ACCENT,
                     font=FONT_BTN, padding=(16, 8),
@@ -130,6 +140,11 @@ class LayoutMixin:  # pylint: disable=too-few-public-methods,no-member
                  s.layout("Horizontal.TProgressbar"))
         s.configure("NH.TProgressbar",
                     troughcolor=style.BORDER, background=style.NH_BAR,
+                    thickness=10, borderwidth=0)
+        s.layout("Horizontal.HI.TProgressbar",
+                 s.layout("Horizontal.TProgressbar"))
+        s.configure("HI.TProgressbar",
+                    troughcolor=style.BORDER, background=style.HI_BAR,
                     thickness=10, borderwidth=0)
 
         # Separator
@@ -499,7 +514,7 @@ class LayoutMixin:  # pylint: disable=too-few-public-methods,no-member
                   style="Head.TLabel").grid(
                       row=0, column=0, columnspan=3,
                       padx=PAD, pady=(PAD, 4), sticky="w")
-        ttk.Label(card, text="Paste an E-Hentai / ExHentai / nhentai gallery URL and click Start.",
+        ttk.Label(card, text="Paste an E-Hentai / ExHentai / nhentai / hitomi gallery URL and click Start.",
                   style="Sub.TLabel").grid(
                       row=1, column=0, columnspan=3,
                       padx=PAD, pady=(0, PAD), sticky="w")
@@ -633,12 +648,7 @@ class LayoutMixin:  # pylint: disable=too-few-public-methods,no-member
 
         self._batch_btn = _btn(btn_row, "▶  Start Batch", self._start_batch)
         self._batch_btn.pack(side="right", before=self._reload_btn)  # main actions keep their space
-        # Pause / Resume: freezes every request; the list and the partial album stay saved,
-        # so the program can also be closed and the batch restarted later
-        self._pause_btn = _btn(btn_row, "⏸  Pause", self._toggle_pause, style="Ghost.TButton")
-        self._pause_btn.pack(side="right", padx=(0, 6), before=self._reload_btn)
-        self._pause_btn.configure(state="disabled")
-        # Seven buttons on one row: size them on their text so all fit in the default window
+        # Six buttons on one row: size them on their text so all fit in the default window
         for child in btn_row.winfo_children():
             if isinstance(child, ttk.Button) and child is not self._batch_btn:
                 child.configure(width=0)
@@ -728,22 +738,47 @@ class LayoutMixin:  # pylint: disable=too-few-public-methods,no-member
     LANE_BARS = (
         (throttle.SITE_EH, "E-Hentai/ExHentai:", "Task.TProgressbar"),
         (throttle.SITE_NH, "nhentai:", "NH.TProgressbar"),
+        (throttle.SITE_HI, "hitomi:", "HI.TProgressbar"),
     )
     LANE_IDLE = "Idle"
 
     def _build_progress_area(self) -> None:
-        """Build the progress bars: the total, then one bar per site (E-Hentai / ExHentai and nhentai).
+        """Build the progress bars: the total, then one bar per site (E-Hentai / ExHentai, nhentai and hitomi).
 
         Single download: the site bar shows the page being downloaded.
         Batch / retry: each site bar shows the album of that site in progress, because the
-        two sites download at the same time.
+        sites download at the same time.
         """
         prog_frame = tk.Frame(self, bg=style.BG)
         prog_frame.pack(side="bottom", fill="x", padx=PAD, pady=(4, 6))
 
+        # Controls of the running download (single, batch or retry), at the right of the bars
+        controls = tk.Frame(prog_frame, bg=style.BG)
+        controls.pack(side="right", fill="y", padx=(10, 0))
+        bars = tk.Frame(prog_frame, bg=style.BG)
+        bars.pack(side="left", fill="x", expand=True)
+        # Pause / Resume: freezes every request; the list and the partial album stay saved,
+        # so the program can also be closed and the batch restarted later
+        self._pause_btn = ttk.Button(controls, text="⏸  Pause", command=self._toggle_pause,
+                                     style="Control.TButton", cursor="hand2")
+        # Stop: the galleries in progress finish, then nothing new starts (the rest stays in
+        # the list). Cancel: everything stops now, temp/ and both lists are emptied.
+        self._stop_btn = ttk.Button(controls, text="⏹  Stop", command=self._request_stop,
+                                    style="Control.TButton", cursor="hand2")
+        self._cancel_btn = ttk.Button(controls, text="✖  Cancel", command=self._request_cancel,
+                                      style="Control.TButton", cursor="hand2")
+        for btn, tip in (
+            (self._pause_btn, "Pause / resume every download (the list and the partial galleries stay saved)"),
+            (self._stop_btn, "Finish the galleries already downloading, then stop (the rest stays in the list)"),
+            (self._cancel_btn, "Stop everything now: deletes temp/ and empties the batch list and Retry Failed"),
+        ):
+            btn.pack(side="top", fill="x", pady=(0, 2))
+            btn.configure(state="disabled")
+            _Tooltip(btn, tip)
+
         def bar_row(label: str, bar_style: str, pady: tuple[int, int]) -> tuple:
             """One row: label, bar, value text."""
-            row = tk.Frame(prog_frame, bg=style.BG)
+            row = tk.Frame(bars, bg=style.BG)
             row.pack(fill="x", pady=pady)
             row.columnconfigure(1, weight=1)
             lbl = tk.Label(

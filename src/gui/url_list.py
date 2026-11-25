@@ -15,6 +15,7 @@ from src.config import (
     DONE_LINE_REMOVE_DELAY,
 )
 
+from src import throttle
 from src.gui.style import (
     ts as _ts,
 )
@@ -291,7 +292,7 @@ class UrlListMixin:  # pylint: disable=too-few-public-methods,no-member
                 task = {"id": task_id, "url": url, "name": name, "dup": dup, "key": key}
                 lane = site_lane(url)
                 self._batch_queues[lane].append(task)
-                self._ensure_lane(lane)  # E-Hentai and nhentai download side by side
+                self._ensure_lane(lane)  # every site downloads side by side
                 if valid and not dup and not gallery_status(url):
                     self._verify_queue.put(task)
 
@@ -425,7 +426,12 @@ class UrlListMixin:  # pylint: disable=too-few-public-methods,no-member
     def _on_verify_done(self, ok_count: int, bad_count: int, domains: dict) -> None:
         """Re-enable the UI, save the annotated list and print the verification summary."""
         self._running = False
+        self._stop_requested = self._cancel_requested = False
         self._set_buttons_state("normal")
+        throttle.set_paused(False)
+        self._pause_btn.configure(state="disabled", text="⏸  Pause")
+        self._stop_btn.configure(state="disabled")
+        self._cancel_btn.configure(state="disabled")
         self._save_urls_txt()
         sources = ", ".join(f"{d}: {n}" for d, n in sorted(domains.items())) or "none"
         summary = f"{ok_count} valid, {bad_count} with problems. Download source → {sources}"
@@ -437,7 +443,7 @@ class UrlListMixin:  # pylint: disable=too-few-public-methods,no-member
         self._sort_batch_list()
 
     def _sort_batch_list(self) -> None:
-        """Sort the list by site (E-Hentai / ExHentai, then nhentai), then size (fewer images first).
+        """Sort the list by site (E-Hentai / ExHentai, then nhentai, then hitomi), then size (fewer images first).
 
         Done after Verify Links and when a batch starts: each site lane then goes down the list
         one line after another, so the list does not jump up and down while it downloads.
@@ -462,4 +468,4 @@ class UrlListMixin:  # pylint: disable=too-few-public-methods,no-member
         self._decorate_all(self._batch_editor)
         self._save_urls_txt(quiet=True)
         self._q.put(("LOG", _ts(), "Download order",
-                     "List sorted: E-Hentai / ExHentai first, then nhentai; in each, galleries with fewer images first."))
+                     "List sorted: E-Hentai / ExHentai first, then nhentai, then hitomi; in each, galleries with fewer images first."))

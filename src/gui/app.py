@@ -10,6 +10,7 @@ import os
 import queue
 import re
 import threading
+import time
 from collections import deque
 from pathlib import Path
 from tkinter import (
@@ -46,6 +47,9 @@ from src.gui.style import (
 
 
 _URL_RE = re.compile(r"https?://[^\s<>\"']+[^\s<>\"'.,;:!?)]")  # links in log lines
+POLL_BUDGET_S = 0.04        # longest time one _poll_queue() call spends on messages
+LOG_BOX_MAX_LINES = 5000    # lines kept in the log box (session.log keeps everything)
+
 
 class EHentaiGUI(  # pylint: disable=too-many-ancestors,too-many-instance-attributes
     LayoutMixin, UrlListMixin, QueueViewMixin, StatsTabMixin, LinkIntakeMixin, WorkersMixin, WhenDoneMixin,
@@ -79,6 +83,9 @@ class EHentaiGUI(  # pylint: disable=too-many-ancestors,too-many-instance-attrib
         self._q: queue.Queue = queue.Queue()
         self._running = False  # True while a download is in progress
         self._closed = False
+        self._run_mode = ""              # single / batch / retry / verify while running
+        self._stop_requested = False     # Stop: finish the galleries in progress, start no new one
+        self._cancel_requested = False   # Cancel: stop now, then delete temp/ and empty both lists
 
         # Batch download with a live queue (links can be added while it runs).
         # Every claimed editor line carries a "task_<id>" tag, so it can be found again even
@@ -157,6 +164,10 @@ class EHentaiGUI(  # pylint: disable=too-many-ancestors,too-many-instance-attrib
         self.protocol("WM_DELETE_WINDOW", self._on_window_close)
         atexit.register(self._on_exit)
 
+    def request_show(self) -> None:
+        """Another start of the program (any thread): bring this window to the front."""
+        self._q.put(("INSTANCE", "show"))
+
     def _open_account_dialog(self) -> None:
         """File → Account & cookies…"""
         gui_dialogs.AccountDialog(self, self._palette(), DIALOG_FONTS, self._on_cookies_saved)
@@ -198,9 +209,17 @@ class EHentaiGUI(  # pylint: disable=too-many-ancestors,too-many-instance-attrib
         append_session_banner("GUI APPLICATION START")
 
     def _poll_queue(self) -> None:
-        """Drain the inter-thread queue and update widgets. Called every 100 ms."""
+        """Drain the inter-thread queue and update widgets. Called every 100 ms.
+
+        At most POLL_BUDGET_S seconds of messages are handled per call: during a fast
+        download the workers send many messages, and a window that never gets back to its
+        event loop does not answer clicks, redraws and drag and drop. What is left is
+        handled 10 ms later.
+        """
+        deadline = time.monotonic() + POLL_BUDGET_S
+        images_saved = 0
         try:
-            while True:
+            while time.monotonic() < deadline:
                 msg = self._q.get_nowait()
                 msg_type = msg[0]
 
@@ -288,20 +307,27 @@ class EHentaiGUI(  # pylint: disable=too-many-ancestors,too-many-instance-attrib
                                          f"(checked every {throttle.NETWORK_CHECK_INTERVAL} s).")
                     self._status_lbl.configure(foreground=style.TEXT_SEC if msg[1] else style.WARNING)
                 elif msg_type == "IMAGE_SAVED":
-                    self._session_images += 1
-                    self._refresh_session_counter()
+                    images_saved += 1  # the counter is redrawn once, below
                 elif msg_type == "UPDATE":
                     self._on_update_result(msg[1], msg[2], msg[3])
                 elif msg_type == "TRAY":
                     self._on_tray_action(msg[1])
+                elif msg_type == "INSTANCE":
+                    self._bring_to_front()
+                    self._append_log(_ts(), "App", "The program is already open: this window was "
+                                                   "brought to the front instead of opening a second one.")
         except queue.Empty:
             pass
+        if images_saved:
+            self._session_images += images_saved
+            self._refresh_session_counter()
         # While a batch runs, hand newly added lines to it (about twice a second)
         if self._batch_accepting:
-            self._poll_ticks = getattr(self, "_poll_ticks", 0) + 1
-            if self._poll_ticks % 5 == 0:
+            now = time.monotonic()
+            if now - getattr(self, "_last_live_scan", 0.0) >= 0.5:
+                self._last_live_scan = now
                 self._scan_batch_editor()
-        self.after(100, self._poll_queue)
+        self.after(10 if not self._q.empty() else 100, self._poll_queue)
 
     def _append_log(self, ts: str, event: str, details: str) -> None:
         """Write one line to the log box (and session.log), coloured by its severity keywords."""
@@ -314,7 +340,8 @@ class EHentaiGUI(  # pylint: disable=too-many-ancestors,too-many-instance-attrib
         low = (event + " " + details).lower()
         if any(w in low for w in ("error", "fail", "exception", "critical")):
             tag = "ERROR"
-        elif any(w in low for w in ("warn", "notice", "skip", "already present", "pause", "rate limit", "waiting", "limit")):
+        elif any(w in low for w in ("warn", "notice", "skip", "already present", "pause", "rate limit", "waiting",
+                                    "limit", "cancel", "stop")):
             tag = "WARNING"
         elif any(w in low for w in ("success", "complete", "downloaded", "renamed", "created", "ok")):
             tag = "ok"
@@ -325,6 +352,11 @@ class EHentaiGUI(  # pylint: disable=too-many-ancestors,too-many-instance-attrib
             self._log_box.insert(END, match.group(0), (tag, "link"))
             pos = match.end()
         self._log_box.insert(END, f"{details[pos:]}\n", tag)
+        # A very long log makes every insert slower: keep the last LOG_BOX_MAX_LINES lines
+        # (session.log keeps everything)
+        lines = int(self._log_box.index("end-1c").split(".", maxsplit=1)[0])
+        if lines > LOG_BOX_MAX_LINES + 500:
+            self._log_box.delete("1.0", f"{lines - LOG_BOX_MAX_LINES}.0")
         self._log_box.see(END)
         self._log_box.configure(state="disabled")
 
@@ -383,6 +415,12 @@ class EHentaiGUI(  # pylint: disable=too-many-ancestors,too-many-instance-attrib
         """A worker reported an IP ban (until > 0) or the ban was cleared (until == 0)."""
         self._ban_until = until
         if until > 0:
+            if getattr(self, "_tray_hidden", False):  # window in the tray: tell the user anyway
+                sites = throttle.banned_sites()
+                if sites:
+                    site, left = max(sites, key=lambda item: item[1])
+                    self._tray_notify(f"{self._ban_label(site)}: {site} downloads paused for "
+                                      f"{int(left) // 60}:{int(left) % 60:02d}, then they resume by themselves.")
             self._resume_btn.pack(side="right", padx=(0, PAD), before=self._status_lbl)
             self._status_lbl.configure(foreground=style.WARNING)
             if self._ban_tick_job is None:
@@ -403,12 +441,20 @@ class EHentaiGUI(  # pylint: disable=too-many-ancestors,too-many-instance-attrib
         parts = []
         for site, left in throttle.banned_sites():
             left = int(left)
-            what = "IP banned by E-Hentai" if site == throttle.SITE_EH else f"Blocked by {site} (too many requests)"
-            parts.append(f"{what}: {site} paused, resuming in {left // 60}:{left % 60:02d}")
+            parts.append(f"{self._ban_label(site)}: {site} paused, resuming in {left // 60}:{left % 60:02d}")
         self._status_var.set(
             f"⏸ {' · '.join(parts)} (changed IP with a VPN? press Resume now)"
         )
         self._ban_tick_job = self.after(1000, self._ban_tick)
+
+    @staticmethod
+    def _ban_label(site: str) -> str:
+        """How the pause of a site is called in the status bar and in the notifications."""
+        if site == throttle.SITE_EH:
+            return "IP banned by E-Hentai"
+        if site == throttle.SITE_HI:
+            return "Soft ban by hitomi (too many requests)"
+        return f"Blocked by {site} (too many requests)"
 
     def _end_ban_display(self, message: str) -> None:
         """Hide the ban countdown and the 'Resume now' button."""
@@ -446,6 +492,101 @@ class EHentaiGUI(  # pylint: disable=too-many-ancestors,too-many-instance-attrib
             self._pause_btn.configure(text="⏸  Pause")
             self._status_var.set("▶ Downloads resumed.")
             self._append_log(_ts(), "Resume", "Downloads resumed.")
+
+    def _request_stop(self) -> None:
+        """'Stop': the galleries already downloading finish, then nothing new starts.
+
+        The links not started yet stay in the batch list (and in Retry Failed for a retry),
+        so the next Start Batch / Retry Failed goes on from there.
+        """
+        if not self._running or self._stop_requested or self._cancel_requested:
+            return
+        self._stop_requested = True
+        with self._batch_lock:
+            self._batch_accepting = False   # lines added from now on wait for the next batch
+        self._stop_btn.configure(state="disabled")
+        append_session_banner("STOP REQUESTED BY THE USER")
+        if throttle.is_paused():  # a paused gallery could never finish: resume it
+            throttle.set_paused(False)
+            self._pause_btn.configure(text="⏸  Pause")
+        if self._run_mode == "verify":
+            what = "the link being checked finishes, then the check stops."
+        elif self._run_mode == "single":
+            what = "the gallery in progress finishes, then the download ends."
+        else:
+            what = ("the galleries in progress finish, then the download ends: the ones not started yet stay in "
+                    + ("the retry queue." if self._run_mode == "retry" else "the list for the next Start Batch."))
+        self._status_var.set("⏹ Stopping: " + what)
+        self._append_log(_ts(), "Stop", "Stop requested: " + what)
+
+    def _request_cancel(self) -> None:
+        """'Cancel' (after a confirmation): stop every download now, delete temp/ and empty both lists."""
+        if not self._running or self._cancel_requested or self._run_mode == "verify":
+            return
+        if not messagebox.askyesno(
+            "Cancel all downloads",
+            "Stop every download now?\n\n"
+            "• the galleries in progress are interrupted and their partial files deleted\n"
+            "• the temp folder is emptied, partial galleries of earlier sessions included\n"
+            "• the batch list (URLs.txt) and the Retry Failed list are emptied\n\n"
+            "Galleries already completed stay in the download folder. This cannot be undone.",
+            icon="warning",
+            default="no",
+            parent=self,
+        ):
+            return
+        if not self._running:  # the download ended while the question was open
+            return
+        self._cancel_requested = True
+        throttle.request_cancel()   # waiting threads wake up and stop at once
+        with self._batch_lock:
+            self._batch_accepting = False
+            for lane_queue in self._batch_queues.values():
+                for task in lane_queue:
+                    self._task_state[task["id"]] = "cancelled"
+                lane_queue.clear()
+        for btn in (self._pause_btn, self._stop_btn, self._cancel_btn):
+            btn.configure(state="disabled")
+        self._pause_btn.configure(text="⏸  Pause")
+        append_session_banner("CANCEL REQUESTED BY THE USER")
+        self._status_var.set("✖ Cancelling: waiting for the images being received to end…")
+        self._append_log(_ts(), "Cancel",
+                         "Cancel requested: the downloads stop as soon as the images being received end.")
+
+    def _finish_cancel(self) -> None:
+        """GUI thread, after a cancelled download ended: delete temp/ and empty both lists."""
+        from src.cli.downloader import save_failed_urls  # pylint: disable=import-outside-toplevel
+        from src.file_utils import clear_folder  # pylint: disable=import-outside-toplevel
+
+        throttle.clear_cancel()
+        self._pending_removals_cancel()
+        self._active_tasks = {}
+        self._failed_task_ids = []
+        self._clear_batch_marks()
+        self._editor_edit(lambda: self._batch_editor.delete("1.0", END))
+        self._save_urls_txt(quiet=True)
+        save_failed_urls([])
+        self._load_retry_list()
+        removed, errors = clear_folder(config.TEMP_FOLDER)
+        self._bar1["value"] = 0
+        self._bar1_pct.configure(text="0%")
+        self._reset_lane_bars()
+        append_session_banner("DOWNLOAD CANCELLED BY THE USER")
+        details = (f"Downloads cancelled: temp emptied ({removed} item(s) deleted), the batch list and "
+                   "the retry queue are empty now.")
+        if errors:
+            details += f" {len(errors)} item(s) could not be deleted (in use?): {', '.join(errors[:3])}"
+        self._append_log(_ts(), "Cancelled", details)
+        self._status_var.set("✖ Downloads cancelled: temp, batch list and Retry Failed emptied.")
+
+    def _pending_removals_cancel(self) -> None:
+        """Forget the timers that remove downloaded lines (the whole list is emptied anyway)."""
+        for handle in list(getattr(self, "_pending_removals", {}).values()):
+            try:
+                self.after_cancel(handle)
+            except Exception:  # pylint: disable=broad-except
+                pass
+        self._pending_removals = {}
 
     def _resume_after_ban(self) -> None:
         """'Resume now': stop waiting (useful after switching IP). If the ban is still on,
@@ -547,7 +688,7 @@ class EHentaiGUI(  # pylint: disable=too-many-ancestors,too-many-instance-attrib
             self._save_settings()
             self._set_menu_options_state("normal")
             self._append_log(_ts(), "Settings",
-                             f"Download folder: {config.DOWNLOAD_FOLDER} (E-Hentai/ and nhentai/ are made inside it). "
+                             f"Download folder: {config.DOWNLOAD_FOLDER} (E-Hentai/, nhentai/ and hitomi/ are made inside it). "
                              "Albums in progress stay in temp/ until they are complete.")
 
     def _reset_download_folder(self) -> None:
@@ -593,7 +734,7 @@ class EHentaiGUI(  # pylint: disable=too-many-ancestors,too-many-instance-attrib
             if not tag_utils.get_favorites():
                 text += " No favorite tag is set yet: add them in Settings → Favorite tags…"
         else:
-            text = "Folders by favorite tag OFF: every gallery goes into E-Hentai/ or nhentai/."
+            text = "Folders by favorite tag OFF: every gallery goes into E-Hentai/, nhentai/ or hitomi/."
         self._append_log(_ts(), "Settings", text)
 
     def _get_selected_format(self) -> str:
@@ -694,10 +835,10 @@ class EHentaiGUI(  # pylint: disable=too-many-ancestors,too-many-instance-attrib
         tasks = self._editor_entries()
         if not self._confirm_invalid_links(tasks, "Start the download"):
             return
-        self._sort_batch_list()  # by site, then size: the two lanes go down the list in order
+        self._sort_batch_list()  # by site, then size: the site lanes go down the list in order
 
         fmt = self._get_selected_format()
-        self._begin_download(editor_editable=True)
+        self._begin_download(editor_editable=True, mode="batch")
         self._bar1_lbl.configure(text="Batch Total:")
         self._clear_batch_marks()
 
@@ -746,7 +887,7 @@ class EHentaiGUI(  # pylint: disable=too-many-ancestors,too-many-instance-attrib
         if self._offer_duplicate_cleanup() == "cancel":
             return
         entries = self._editor_entries()
-        self._begin_download()
+        self._begin_download(mode="verify")
         self._bar1_lbl.configure(text="Verified:")
         self._status_var.set(f"Verifying {len(entries)} link(s)…")
         threading.Thread(target=self._run_verify, args=(entries,), daemon=True).start()
@@ -765,7 +906,7 @@ class EHentaiGUI(  # pylint: disable=too-many-ancestors,too-many-instance-attrib
             return
 
         fmt = self._get_selected_format()
-        self._begin_download()
+        self._begin_download(mode="retry")
         self._bar1_lbl.configure(text="Retry Total:")
         self._retry_list.configure(state="normal")
         self._retry_list.tag_remove("active_batch_line", "1.0", END)

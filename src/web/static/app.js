@@ -210,12 +210,13 @@ $("#single-clear").addEventListener("click", () => { $("#single-url").value = ""
 
 // ------------------------------------------------------------------ batch list
 
-async function addLinks(text) {
+async function addLinks(text, source) {
   if (!text.trim()) return;
   try {
-    const r = await api("/api/batch/add", { text });
-    if (!r.found) alertBox("No links", "No E-Hentai / ExHentai / nhentai gallery link found in the text.");
-    else $("#add-text").value = "";
+    const r = await api("/api/batch/add", { text, source: source || "Paste" });
+    if (!r.found) alertBox("No links", "No E-Hentai / ExHentai / nhentai / hitomi gallery link found in the text.");
+    else if (source !== "Drop") $("#add-text").value = "";
+    else showTab("batch");
     poll();
   } catch (err) { showError(err); }
 }
@@ -227,6 +228,62 @@ $("#batch-list").addEventListener("paste", (e) => {
   e.preventDefault();
   addLinks((e.clipboardData || window.clipboardData).getData("text"));
 });
+
+// Drag and drop of links from another tab or program onto any point of the page (not the
+// reordering of the list lines, which uses dragId). Text files (.txt, .url…) are read too.
+const MAX_DROPPED_FILE_BYTES = 2000000;
+let dropDepth = 0;
+
+function externalDrag(e) {
+  if (dragId !== null || !e.dataTransfer) return false;
+  if (!$("#modal-back").classList.contains("hidden")) return false;  // a dialog is open
+  const types = Array.from(e.dataTransfer.types || []);
+  return types.includes("text/uri-list") || types.includes("text/plain") || types.includes("Files");
+}
+
+function showDropHint(on) {
+  $("#drop-hint").classList.toggle("hidden", !on);
+}
+
+function readDroppedFile(file) {
+  return new Promise((resolve) => {
+    if (file.size > MAX_DROPPED_FILE_BYTES) { resolve(""); return; }
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => resolve("");
+    reader.readAsText(file);
+  });
+}
+
+window.addEventListener("dragenter", (e) => {
+  if (!externalDrag(e)) return;
+  e.preventDefault();
+  dropDepth += 1;
+  showDropHint(true);
+});
+window.addEventListener("dragover", (e) => {
+  if (!externalDrag(e)) return;
+  e.preventDefault();  // without this the browser would open the link instead
+  e.dataTransfer.dropEffect = "copy";
+});
+window.addEventListener("dragleave", (e) => {
+  if (!externalDrag(e)) return;
+  dropDepth = Math.max(0, dropDepth - 1);
+  if (!dropDepth) showDropHint(false);
+});
+window.addEventListener("drop", async (e) => {
+  if (!externalDrag(e)) return;
+  dropDepth = 0;
+  showDropHint(false);
+  if (e.target && e.target.id === "single-url") return;  // a link dropped on the Single field goes in it
+  e.preventDefault();
+  e.stopPropagation();
+  const dt = e.dataTransfer;
+  const texts = [dt.getData("text/uri-list"), dt.getData("text/plain")];
+  for (const file of Array.from(dt.files || [])) texts.push(await readDroppedFile(file));
+  addLinks(texts.filter(Boolean).join("\n"), "Drop");
+}, true);
+window.addEventListener("dragend", () => { dropDepth = 0; showDropHint(false); });
 
 const STATUS_ICONS = { GOOD: "✅", BAD: "❌" };
 
@@ -425,6 +482,23 @@ async function togglePause() {
 $("#pause-btn").addEventListener("click", togglePause);
 $$(".pause-twin").forEach((b) => b.addEventListener("click", togglePause));
 
+// Stop: the galleries in progress finish, then nothing new starts (the rest stays in the list).
+// Cancel: everything stops now; temp/, the batch list and Retry Failed are emptied.
+$$(".stop-btn").forEach((b) => b.addEventListener("click", async () => {
+  try { await api("/api/stop", {}); poll(); } catch (err) { showError(err); }
+}));
+$$(".cancel-btn").forEach((b) => b.addEventListener("click", async () => {
+  try {
+    if (!await confirmBox("Cancel all downloads", "Stop every download now?\n\n" +
+      "• the galleries in progress are interrupted and their partial files deleted\n" +
+      "• the temp folder is emptied, partial galleries of earlier sessions included\n" +
+      "• the batch list (URLs.txt) and the Retry Failed list are emptied\n\n" +
+      "Galleries already completed stay in the download folder. This cannot be undone.", "Cancel downloads", "Keep downloading")) return;
+    await api("/api/cancel", {});
+    poll();
+  } catch (err) { showError(err); }
+}));
+
 // ------------------------------------------------------------------ retry
 
 function renderRetry() {
@@ -506,16 +580,20 @@ function updateButtons() {
   $$("[data-setting=auto_rename], [data-setting=cbz_archive], [data-setting=comic_info], [data-setting=tag_folders]")
     .forEach((c) => { c.disabled = busy; });
   $("[data-action=favorites]").disabled = busy;
-  const canPause = busy && S.mode !== "verify";
+  const canPause = busy && S.mode !== "verify" && !S.cancelling;
   for (const b of [$("#pause-btn"), ...$$(".pause-twin")]) {
     b.disabled = !canPause;
     b.textContent = S.paused ? "▶ Resume" : "⏸ Pause";
   }
+  $$(".stop-btn").forEach((b) => { b.disabled = !busy || S.stopping || S.cancelling; });
+  $$(".cancel-btn").forEach((b) => { b.disabled = !busy || S.mode === "verify" || S.cancelling; });
 }
 
 function render(data) {
   S.mode = data.mode;
   S.paused = data.paused;
+  S.stopping = !!data.stopping;
+  S.cancelling = !!data.cancelling;
   if (JSON.stringify(S.settings) !== JSON.stringify(data.settings)) { S.settings = data.settings; applySettings(); }
   $("#status").textContent = data.status;
   $("#status").title = data.status;
@@ -526,7 +604,7 @@ function render(data) {
   if (!lanes.childElementCount) {
     for (const lane of data.lanes) {
       lanes.append(el("div", { class: "bar-row" }, el("span", { class: "bar-label", text: `${lane.label}:` }),
-        el("div", { class: "bar" }, el("div", { class: `fill ${lane.site === "nhentai" ? "nh" : "eh"}`, id: `lane-${lane.site}` })),
+        el("div", { class: "bar" }, el("div", { class: `fill ${{ nhentai: "nh", hitomi: "hi" }[lane.site] || "eh"}`, id: `lane-${lane.site}` })),
         el("span", { class: "bar-text", id: `lane-text-${lane.site}` })));
     }
   }
@@ -543,7 +621,7 @@ function render(data) {
   $("#session").title = `Images downloaded since ${String(data.counter_reset_hour).padStart(2, "0")}:00 ` +
     "(the counter starts again every day at that hour)";
   if (data.ban.length) {
-    const text = data.ban.map((b) => `${b.site} ${b.site === "nhentai" ? "rate limit" : "IP ban"}: resume in ${fmtTime(b.remaining)}`).join(" · ");
+    const text = data.ban.map((b) => `${b.site} ${{ "E-Hentai": "IP ban", hitomi: "soft ban (too many requests)" }[b.site] || "rate limit"}: resume in ${fmtTime(b.remaining)}`).join(" · ");
     $("#ban-text").textContent = `⏳ ${text}`;
     $("#ban").classList.remove("hidden");
   } else $("#ban").classList.add("hidden");
@@ -740,7 +818,7 @@ async function showFavorites() {
     el("div", { class: "fav-tools" }, filter, add, el("button", { class: "btn ghost", text: "＋ Add", onclick: addTag })),
     table, count,
     el("label", { class: "note" }, folders, " Sort downloads into folders by favorite tag (<site>/<label>/<gallery>)"),
-    el("p", { class: "note", text: "Galleries without a favorite tag stay in E-Hentai/ or nhentai/. Lines already in the list get " +
+    el("p", { class: "note", text: "Galleries without a favorite tag stay in E-Hentai/, nhentai/ or hitomi/. Lines already in the list get " +
       "their label after Verify Links." }));
   await modal("Favorite tags", body, [
     { label: "Cancel", value: false },
@@ -854,7 +932,7 @@ function showAbout() {
     el("div", {},
       el("h3", { text: `${i.name}\nversion ${i.version}` }),
       el("p", { class: "msg", text: [
-        "Downloads E-Hentai, ExHentai and nhentai galleries as image folders or CBZ archives.",
+        "Downloads E-Hentai, ExHentai, nhentai and hitomi galleries as image folders or CBZ archives.",
         "Web version for Docker: the downloads run in the server, also with the browser closed.", "",
         `This version: ${i.project_url}`, `Original project: ${i.upstream_url}`,
         "Developed and modified with the help of Claude AI (Anthropic).",

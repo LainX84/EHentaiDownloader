@@ -7,7 +7,6 @@ mechanisms and exponential backoff.
 from __future__ import annotations
 
 import random
-import time
 from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
@@ -91,7 +90,7 @@ def _fetch_with_retries_single(
                     "Rate limit",
                     f"Request limit hit ({status_code}). Waiting {RATE_LIMIT_SLEEPING_TIME}s...",
                 )
-                time.sleep(RATE_LIMIT_SLEEPING_TIME)
+                throttle.sleep(RATE_LIMIT_SLEEPING_TIME)
                 attempt += 1
                 continue
             live_manager.update_log(
@@ -135,7 +134,7 @@ def _fetch_with_retries_single(
                 f"Download failed for page {page_idx}. Retrying ({attempt + 1}/{retries})...",
             )
             delay = 2 ** (attempt + 1) + random.uniform(1, 2)  # noqa: S311
-            time.sleep(delay)
+            throttle.sleep(delay)
         attempt += 1
 
     live_manager.update_log(

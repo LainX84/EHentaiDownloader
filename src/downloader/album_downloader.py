@@ -11,7 +11,6 @@ import re
 import shutil
 import subprocess
 import threading
-import time
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import urlparse
@@ -526,7 +525,7 @@ class AlbumDownloader(CbzArchiveMixin):
                     "Pause",
                     "Short courtesy pause between gallery pages (anti rate-limit)...",
                 )
-                time.sleep(random.uniform(1, 5))  # noqa: S311
+                throttle.sleep(random.uniform(1, 5))  # noqa: S311
 
         if self._quota_exceeded.is_set():
             self.live_manager.update_log(
@@ -942,7 +941,7 @@ class AlbumDownloader(CbzArchiveMixin):
             _mark_done()
 
             # Polite sleep between tasks in each thread
-            time.sleep(random.uniform(1.0, 3.0))  # noqa: S311
+            throttle.sleep(random.uniform(1.0, 3.0))  # noqa: S311
 
         future_to_page: dict = {}
         workers = max(1, min(MAX_WORKERS, throttle.current_workers()))

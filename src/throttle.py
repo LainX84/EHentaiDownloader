@@ -5,9 +5,9 @@ Two things live here:
 * Speed level (1 = very slow ... 5 = very fast). It sets the minimum pause between two
   requests to the gallery / picture HTML pages (shared by all threads of the same site,
   so 5 workers do not mean 5x the requests) and how many images are downloaded in
-  parallel. E-Hentai / ExHentai and nhentai are different servers with different rules:
-  each one has its own pace and its own ban, so a batch can download one gallery from
-  each site at the same time.
+  parallel. E-Hentai / ExHentai, nhentai and hitomi are different servers with different
+  rules: each one has its own pace and its own ban, so a batch can download one gallery
+  from each site at the same time.
   The GUI slider changes it while a download runs: the pause applies immediately, the
   number of parallel downloads from the next album.
 
@@ -15,13 +15,22 @@ Two things live here:
   ... The ban expires in X minutes and Y seconds", the ban time is read from the page,
   a safety margin is added and every E-Hentai request waits until it is over. The current
   album is paused, not skipped: nothing moves on to the next gallery while the ban lasts
-  (nhentai downloads go on).
+  (nhentai and hitomi downloads go on).
 
-* nhentai "Too Many Requests" (HTTP 429): same pause, only for nhentai, for the time the site asks
-  (Retry-After) plus a random 10-15 s margin (NHENTAI_BLOCK_EXTRA_WAIT).
+* nhentai "Too Many Requests" (HTTP 429): same pause, only for nhentai, for the time the site
+  asks (Retry-After) plus a random 10-15 s margin (NHENTAI_BLOCK_EXTRA_WAIT).
+
+* hitomi "soft ban" (HTTP 503 / 429): same pause, only for hitomi, for the time asked (or
+  30-60 s) plus a random 45-60 s (HITOMI_SOFTBAN_EXTRA_WAIT), see src/hitomi.py.
 
 * User pause (GUI "Pause" button): no new request starts until "Resume"; images already
   being received finish normally.
+
+* User cancel (GUI "Cancel" button): every waiting download thread (pause, ban, pacing,
+  courtesy sleeps, lost connection) wakes up at once and raises DownloadCancelled, and so
+  does every new request. DownloadCancelled is a BaseException on purpose: the many
+  "except Exception" of the downloaders (which count an error as a failed image) let it
+  through, so a cancelled gallery stops instead of being recorded as failed.
 
 * Internet connection lost: when a request fails with a connection error and no site can
   be reached at all, every download waits (like the user pause) until the connection is
@@ -57,11 +66,12 @@ SPEED_LEVELS: dict[int, tuple[str, float, int]] = {
 MIN_SPEED = min(SPEED_LEVELS)
 MAX_SPEED = max(SPEED_LEVELS)
 
-# Sites with their own pacing and ban: E-Hentai / ExHentai (same servers, same IP ban)
-# and nhentai. Each site has its own clock, so the two can download side by side.
+# Sites with their own pacing and ban: E-Hentai / ExHentai (same servers, same IP ban),
+# nhentai and hitomi. Each site has its own clock, so they can download side by side.
 SITE_EH = "E-Hentai"
 SITE_NH = "nhentai"
-SITES = (SITE_EH, SITE_NH)
+SITE_HI = "hitomi"
+SITES = (SITE_EH, SITE_NH, SITE_HI)
 
 _lock = threading.Lock()
 _speed = DEFAULT_SPEED if DEFAULT_SPEED in SPEED_LEVELS else 3
@@ -70,6 +80,7 @@ _ban_until: dict[str, float] = {site: 0.0 for site in SITES}  # end of the curre
 _ban_listeners: list[Callable[[float], None]] = []
 _running = threading.Event()  # cleared = paused by the user
 _running.set()
+_cancel = threading.Event()   # set = the user cancelled every download
 _online = threading.Event()   # cleared = internet connection lost
 _online.set()
 _outages = 0                  # connection losses since the start (galleries compare it)
@@ -123,7 +134,52 @@ def wait_turn(site: str = SITE_EH) -> None:
         _next_slot[site] = slot + interval * random.uniform(0.8, 1.25)  # noqa: S311
     delay = slot - now
     if delay > 0:
-        time.sleep(delay)
+        sleep(delay)
+
+
+# ---------------------------------------------------------------- user cancel
+
+class DownloadCancelled(BaseException):
+    """Raised in a download thread after the user pressed Cancel.
+
+    A BaseException (like KeyboardInterrupt), so the "except Exception" blocks that turn an
+    error into a failed image or gallery do not catch it: the download simply stops.
+    """
+
+
+def request_cancel() -> None:
+    """Cancel every download: waiting threads wake up and raise DownloadCancelled."""
+    _cancel.set()
+
+
+def clear_cancel() -> None:
+    """Forget a previous cancel (call it when a new download starts)."""
+    _cancel.clear()
+
+
+def is_cancelled() -> bool:
+    """True after the user cancelled the downloads (until clear_cancel)."""
+    return _cancel.is_set()
+
+
+def check_cancelled() -> None:
+    """Raise DownloadCancelled when the user cancelled the downloads."""
+    if _cancel.is_set():
+        raise DownloadCancelled()
+
+
+def sleep(seconds: float) -> None:
+    """time.sleep() that a Cancel interrupts at once (raising DownloadCancelled)."""
+    check_cancelled()
+    if seconds > 0 and _cancel.wait(seconds):
+        raise DownloadCancelled()
+
+
+def _wait_event(event: threading.Event) -> None:
+    """Block until event is set, raising DownloadCancelled if the user cancels meanwhile."""
+    while not event.wait(0.25):
+        check_cancelled()
+    check_cancelled()
 
 
 # ---------------------------------------------------------------- user pause
@@ -142,9 +198,12 @@ def is_paused() -> bool:
 
 
 def wait_while_paused() -> None:
-    """Block the calling thread while the downloads are paused or the internet connection is down."""
-    _running.wait()
-    _online.wait()
+    """Block the calling thread while the downloads are paused or the internet connection is down.
+
+    Raises DownloadCancelled when the user cancels (also while waiting).
+    """
+    _wait_event(_running)
+    _wait_event(_online)
 
 
 # ---------------------------------------------------------------- internet connection
@@ -209,7 +268,7 @@ def wait_if_offline(error: Exception | None = None) -> bool:
                             f"{NETWORK_CHECK_INTERVAL} s).", f" ({error})" if error else "")
             _notify_network(False)
             threading.Thread(target=_watch_network, name="network-watch", daemon=True).start()
-    _online.wait()
+    _wait_event(_online)
     return True
 
 
@@ -250,10 +309,10 @@ def _latest_ban_end() -> float:
 
 def report_ban(seconds: float, source: str = SITE_EH,
                margin_range: tuple[float, float] = BAN_EXTRA_WAIT) -> None:
-    """Record a ban / rate limit of the given length for one site ("E-Hentai", "nhentai").
+    """Record a ban / rate limit of the given length for one site ("E-Hentai", "nhentai", "hitomi").
 
-    Every request to that site waits until it ends (plus a random margin); the other site
-    goes on downloading.
+    Every request to that site waits until it ends (plus a random margin); the other sites
+    go on downloading.
     """
     site = _site(source)
     margin = random.uniform(*margin_range)  # noqa: S311
@@ -269,7 +328,7 @@ def report_ban(seconds: float, source: str = SITE_EH,
         return
     total = int(current_until - time.monotonic())
     what = "IP temporarily banned" if site == SITE_EH else "Too many requests: blocked for a while"
-    other = SITE_NH if site == SITE_EH else SITE_EH
+    other = " / ".join(name for name in SITES if name != site)
     logging.warning(
         f"{what} by {site}. {site} downloads paused for "
         f"{total // 60}m {total % 60:02d}s ({seconds:.0f}s asked by the site + {margin:.0f}s margin), then "
@@ -291,7 +350,7 @@ def banned_sites() -> list[tuple[str, float]]:
 
 
 def ban_source() -> str:
-    """Site of the ban that lasts longest ("E-Hentai" or "nhentai"); "" when none."""
+    """Site of the ban that lasts longest ("E-Hentai", "nhentai" or "hitomi"); "" when none."""
     sites = banned_sites()
     return max(sites, key=lambda item: item[1])[0] if sites else ""
 
@@ -320,12 +379,13 @@ def clear_ban() -> None:
 
 
 def wait_while_banned(site: str = SITE_EH) -> None:
-    """Block while site is banned (checks every second, so 'Resume now' is quick)."""
+    """Block while site is banned (checks every second, so 'Resume now' and 'Cancel' are quick)."""
     while True:
+        check_cancelled()
         remaining = ban_remaining(site)
         if remaining <= 0:
             return
-        time.sleep(min(1.0, remaining))
+        sleep(min(1.0, remaining))
 
 
 def add_ban_listener(callback: Callable[[float], None]) -> None:

@@ -17,12 +17,12 @@ import random
 import re
 import sys
 import threading
-import time
 from pathlib import Path
 from urllib.parse import urlparse
 
-from src import nhentai, stats, tags as tag_utils, throttle
+from src import hitomi, nhentai, stats, tags as tag_utils, throttle
 from src.downloader.album_downloader import AlbumDownloader
+from src.downloader.hitomi_downloader import HitomiAlbumDownloader
 from src.downloader.nhentai_downloader import NHentaiAlbumDownloader
 from src.config import DEFAULT_IMAGE_FORMAT, FAILED_URLS_FILE
 from src.cli import PROJECT_ROOT
@@ -42,6 +42,8 @@ def _normalize_album_url(url: str) -> str:
         return ""
     if nhentai.gallery_id(url):
         return nhentai.canonical_url(url)  # also turns a reader link /g/<id>/7/ into the gallery
+    if hitomi.gallery_id(url):
+        return hitomi.canonical_url(url)  # reader / title links -> /galleries/<id>.html
     try:
         parsed = urlparse(url)
         if parsed.scheme and parsed.netloc and "/g/" in parsed.path:
@@ -57,11 +59,15 @@ def _album_key(url: str) -> str | None:
 
     The id alone identifies a gallery, so the same album is recognised even if one copy
     of the link has a mistyped or truncated token, or uses the other domain.
-    nhentai galleries get an "nh" prefix ('nh694850'): their ids are a different series.
+    nhentai galleries get an "nh" prefix ('nh694850') and hitomi ones a "hi" prefix
+    ('hi3105447'): their ids are different series.
     """
     nh_id = nhentai.gallery_id(url)
     if nh_id:
         return f"nh{nh_id}"
+    hi_id = hitomi.gallery_id(url)
+    if hi_id:
+        return f"hi{hi_id}"
     try:
         parsed = urlparse(url)
         parts = [p for p in parsed.path.split("/") if p]
@@ -106,10 +112,11 @@ def _dedupe_keep_order(urls: list[str]) -> list[str]:
 #
 #     ✅ EHENTAI  |              |  35 | [Artist] Gallery title | https://e-hentai.org/g/1908257/7261eadc3e/
 #     ✅ NHENTAI  |   NETORARE   | 123 | [Artist] Other title | https://nhentai.net/g/694850/
+#     ✅ HITOMI   |              |  28 | Third title | https://hitomi.la/galleries/3105447.html
 #     ❌ EXHENTAI |              |  -  | https://exhentai.org/g/4077626/00cb5bea6/ — invalid link | https://exhentai.org/g/4077626/00cb5bea6/
 #
 #   STATUS  ✅ = the gallery page was read correctly, ❌ = it could not be read
-#   SITE    EHENTAI / EXHENTAI / NHENTAI (the windows show the site logo instead)
+#   SITE    EHENTAI / EXHENTAI / NHENTAI / HITOMI (the windows show the site logo instead)
 #   TAG     the favorite tag of the gallery with the highest priority (blank if none); the
 #           column is as wide as the longest favorite label
 #   IMAGES  number of images (pages) of the gallery ('-' when unknown)
@@ -125,7 +132,7 @@ _LEGACY_LINE_RE = re.compile(r"^(\S+)(?:\s+#\s*(.*))?$")
 _STATUS_VALUES = ("GOOD", "BAD")
 STATUS_ICONS = {"GOOD": "✅", "BAD": "❌"}
 _ICON_STATUS = {icon: status for status, icon in STATUS_ICONS.items()}
-SITE_NAMES = ("EHENTAI", "EXHENTAI", "NHENTAI")
+SITE_NAMES = ("EHENTAI", "EXHENTAI", "NHENTAI", "HITOMI")
 PROBLEM_SEP = " — "  # between the link and the reason in the TITLE column of a ❌ line
 
 # What is known about each gallery, keyed by gallery id (see _album_key):
@@ -139,10 +146,12 @@ def _name_key(url: str) -> str:
 
 
 def site_name(url: str) -> str:
-    """EHENTAI / EXHENTAI / NHENTAI from a gallery link."""
+    """EHENTAI / EXHENTAI / NHENTAI / HITOMI from a gallery link."""
     host = (url or "").lower()
     if "nhentai" in host:
         return "NHENTAI"
+    if "hitomi.la" in host:
+        return "HITOMI"
     if "exhentai" in host:
         return "EXHENTAI"
     return "EHENTAI"
@@ -223,6 +232,10 @@ def short_problem(error_text: str) -> str:
     text = (error_text or "").lower()
     if "invalid gallery url" in text or "key missing" in text or "incomplete link" in text:
         return "invalid link"
+    if "invalid hitomi url" in text or "invalid nhentai url" in text:
+        return "invalid link"
+    if "anime (video)" in text:
+        return "video gallery (no images)"
     if "removed" in text or "unavailable" in text or "does not exist" in text:
         return "gallery removed or unavailable"
     if "banned" in text:
@@ -403,10 +416,10 @@ def estimate_list_images(lines: list[str]) -> dict:
 
 
 def sort_lines_by_size(lines: list[str]) -> list[str] | None:
-    """Reorder the link lines by site, then size: E-Hentai / ExHentai first, then nhentai, and in
-    each group the galleries with fewer images first.
+    """Reorder the link lines by site, then size: E-Hentai / ExHentai first, then nhentai, then
+    hitomi, and in each group the galleries with fewer images first.
 
-    Each site has its own download lane, so with this order both lanes go down the list
+    Each site has its own download lane, so with this order every lane goes down the list
     one line after another. Blank and '#' comment lines stay where they are; link lines are
     redistributed over the remaining positions. In each site group: GOOD galleries by image
     count (smallest first), then GOOD ones with unknown size, then BAD/unchecked links. Ties
@@ -420,7 +433,7 @@ def sort_lines_by_size(lines: list[str]) -> list[str] | None:
         info = _gallery_info.get(_name_key(url), {})
         status = info.get("status") or ("GOOD" if info.get("title") else "")
         images = info.get("images") or 0
-        group = 1 if nhentai.is_nhentai_url(url) else 0
+        group = 1 if nhentai.is_nhentai_url(url) else 2 if hitomi.is_hitomi_url(url) else 0
         if status == "GOOD" and images:
             key = (group, 0, images)
         elif status == "GOOD":
@@ -470,7 +483,7 @@ def verify_gallery(url: str, session=None) -> dict:
         error   – why it failed ('' when ok)
         title   – gallery title ('' if unknown)
         images  – number of images (0 if unknown)
-        domain  – site that will actually be used (e-hentai.org / exhentai.org / nhentai.net)
+        domain  – site that will actually be used (e-hentai.org / exhentai.org / nhentai.net / hitomi.la)
         note    – extra info, e.g. that the other domain was used as a fallback
     """
     result = {"url": url, "ok": False, "error": "", "title": "", "images": 0, "domain": "", "note": "",
@@ -483,6 +496,8 @@ def verify_gallery(url: str, session=None) -> dict:
 
     if nhentai.is_nhentai_url(url):
         return _verify_nhentai(url, result)
+    if hitomi.is_hitomi_url(url):
+        return _verify_hitomi(url, result)
 
     try:
         soup = fetch_page(_normalize_album_url(url), session=session or create_session())
@@ -537,16 +552,38 @@ def _verify_nhentai(url: str, result: dict) -> dict:
     return result
 
 
+_hitomi_session = None
+
+
+def _verify_hitomi(url: str, result: dict) -> dict:
+    """verify_gallery() for hitomi links (one request for the gallery data, own session)."""
+    global _hitomi_session  # pylint: disable=global-statement
+    if _hitomi_session is None:
+        _hitomi_session = hitomi.create_hitomi_session()
+    result["domain"] = hitomi.HITOMI_HOST
+    try:
+        info = hitomi.fetch_gallery_info(url, session=_hitomi_session)
+    except Exception as err:  # pylint: disable=broad-except
+        result["error"] = str(err)
+        remember_gallery_info(url, status="BAD", problem=short_problem(str(err)))
+        return result
+    result.update(ok=True, title=info["title"], images=len(info["pages"]), tags=tag_utils.from_hitomi_info(info))
+    remember_gallery_info(url, title=info["title"], images=result["images"], status="GOOD", tags=result["tags"])
+    return result
+
+
 def create_album_downloader(url: str, **kwargs) -> AlbumDownloader:
-    """Return the downloader for the site of the link (E-Hentai / ExHentai or nhentai)."""
+    """Return the downloader for the site of the link (E-Hentai / ExHentai, nhentai or hitomi)."""
     if nhentai.is_nhentai_url(url):
         return NHentaiAlbumDownloader(url=url, **kwargs)
+    if hitomi.is_hitomi_url(url):
+        return HitomiAlbumDownloader(url=url, **kwargs)
     return AlbumDownloader(url=url, **kwargs)
 
 
 def courtesy_pause() -> None:
     """Short random pause between requests to different galleries (anti rate-limit)."""
-    time.sleep(random.uniform(0.5, 1.5))  # noqa: S311
+    throttle.sleep(random.uniform(0.5, 1.5))  # noqa: S311
 
 
 def _is_retryable_link(url: str) -> bool:
@@ -576,7 +613,7 @@ def load_failed_urls() -> list[str]:
     return _dedupe_keep_order([url for url, _ in load_failed_entries()])
 
 
-# E-Hentai and nhentai albums can finish at the same moment (two download lanes):
+# Albums of different sites can finish at the same moment (one download lane per site):
 # failed_downloads.txt is read, changed and written back under this lock.
 _failed_lock = threading.RLock()
 
@@ -661,7 +698,7 @@ def _download_album_once(  # pylint: disable=too-many-arguments,too-many-positio
     """download_album() without the second try after a connection loss."""
     failed_items: list[str] = []
     remember_gallery_name(url, name_hint)
-    if not nhentai.is_nhentai_url(url) and not has_account_cookies():
+    if not (nhentai.is_nhentai_url(url) or hitomi.is_hitomi_url(url)) and not has_account_cookies():
         live_manager.update_log(
             "WARNING",
             "No ExHentai account cookies set (ipb_member_id, ipb_pass_hash, igneous): "

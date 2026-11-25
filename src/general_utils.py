@@ -10,14 +10,13 @@ import logging
 import os
 import random
 import re
-import time
 from pathlib import Path
 from urllib.parse import urlparse
 
 import requests
 from bs4 import BeautifulSoup
 
-from src import nhentai, throttle
+from src import hitomi, nhentai, throttle
 from src.config import (
     CONNECTION_TIMEOUT,
     MAX_BAN_WAITS,
@@ -37,7 +36,8 @@ GALLERY_TOKEN_RE = re.compile(r"^[0-9a-f]{10}$")
 def validate_gallery_url(url: str) -> str | None:
     """Return an error message if the URL is not a well-formed gallery link, else None.
 
-    nhentai links (https://nhentai.net/g/<gallery id>/) are checked by src.nhentai.
+    nhentai links (https://nhentai.net/g/<gallery id>/) are checked by src.nhentai, hitomi
+    links (https://hitomi.la/galleries/<gallery id>.html) by src.hitomi.
 
     An E-Hentai gallery link looks like https://e-hentai.org/g/<gallery id>/<token>/ where the
     token is always 10 hexadecimal characters. A shorter/longer token usually means the
@@ -45,11 +45,14 @@ def validate_gallery_url(url: str) -> str | None:
     """
     if nhentai.is_nhentai_url(url):
         return nhentai.validate_nhentai_url(url)
+    if hitomi.is_hitomi_url(url):
+        return hitomi.validate_hitomi_url(url)
     match = GALLERY_URL_RE.match(url.strip())
     if not match:
         return (
             f"Invalid gallery URL: {url}. Expected https://e-hentai.org/g/<number>/<token>/ "
-            "(or the same on exhentai.org), or https://nhentai.net/g/<number>/."
+            "(or the same on exhentai.org), https://nhentai.net/g/<number>/ or "
+            "https://hitomi.la/galleries/<number>.html."
         )
     token = match.group(2)
     if not GALLERY_TOKEN_RE.match(token):
@@ -66,23 +69,27 @@ _LINK_IN_TEXT_RE = re.compile(
     r"https?://(?:www\.)?(?:"
     r"(?P<eh>(?:e-hentai|exhentai)\.org)/g/(?P<eh_id>\d+)/(?P<token>[^/\s?#\"'<>]+)"
     r"|nhentai\.net/g/(?P<nh_id>\d+)"
+    rf"|{hitomi.LINK_IN_TEXT}"
     r")",
     re.IGNORECASE,
 )
 
 
 def extract_gallery_links(text: str) -> list[str]:
-    """Return every E-Hentai / ExHentai / nhentai gallery link found in text, in order, once each.
+    """Return every E-Hentai / ExHentai / nhentai / hitomi gallery link found in text, in order, once.
 
     Links are returned in their canonical form (https://e-hentai.org/g/<id>/<token>/,
-    https://nhentai.net/g/<id>/): an nhentai reader link (/g/<id>/<page>/) becomes the
-    gallery link. Malformed tokens are kept as they are, so the usual link check reports them.
+    https://nhentai.net/g/<id>/, https://hitomi.la/galleries/<id>.html): an nhentai reader
+    link (/g/<id>/<page>/) or a hitomi reader / title link becomes the gallery link.
+    Malformed tokens are kept as they are, so the usual link check reports them.
     """
     links: list[str] = []
     seen: set[str] = set()
     for match in _LINK_IN_TEXT_RE.finditer(text or ""):
         if match.group("eh"):
             link = f"https://{match.group('eh').lower()}/g/{match.group('eh_id')}/{match.group('token')}/"
+        elif match.group("hi_id"):
+            link = f"{hitomi.HITOMI_BASE}/galleries/{match.group('hi_id')}.html"
         else:
             link = f"https://nhentai.net/g/{match.group('nh_id')}/"
         if link not in seen:
@@ -504,7 +511,7 @@ def fetch_page(
         logging.warning(
             f"Temporary error on {url} ({last_diagnosis}). Retry {attempt + 2}/{retries} in {delay:.0f}s..."
         )
-        time.sleep(delay)
+        throttle.sleep(delay)
         attempt += 1
 
     if len(diagnoses_by_domain) > 1:

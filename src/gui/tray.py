@@ -189,6 +189,28 @@ class TrayMixin:  # pylint: disable=too-few-public-methods,no-member
         except Exception:  # pylint: disable=broad-except
             pass
 
+    def _bring_to_front(self) -> None:
+        """Show the window (from the tray, the taskbar or behind other windows) and focus it."""
+        if getattr(self, "_closed", False):
+            return
+        if self._tray_hidden:
+            self._show_from_tray()
+        else:
+            self.deiconify()
+            if self.state() == "iconic":
+                self.state("normal")
+            self.lift()
+            try:
+                self.focus_force()
+            except Exception:  # pylint: disable=broad-except
+                pass
+        # Briefly "always on top": the window manager would otherwise leave it behind the others
+        try:
+            self.attributes("-topmost", True)
+            self.after(300, lambda: self.attributes("-topmost", False))
+        except Exception:  # pylint: disable=broad-except
+            pass
+
     # ---- the icon ---------------------------------------------------------------------------
     def _tray_menu(self):
         pystray = _load_pystray()
@@ -199,6 +221,11 @@ class TrayMixin:  # pylint: disable=too-few-public-methods,no-member
             pystray.Menu.SEPARATOR,
             item(lambda _i: "Resume downloads" if throttle.is_paused() else "Pause downloads",
                  post("pause"), enabled=lambda _i: bool(self._running)),
+            item("Stop after the current galleries", post("stop"),
+                 enabled=lambda _i: bool(self._running) and not (self._stop_requested or self._cancel_requested)),
+            item("Cancel all downloads…", post("cancel"),
+                 enabled=lambda _i: bool(self._running) and not self._cancel_requested
+                 and self._run_mode != "verify"),
             item("Open Downloads", post("downloads")),
             pystray.Menu.SEPARATOR,
             item("Quit", post("quit")),
@@ -310,6 +337,11 @@ class TrayMixin:  # pylint: disable=too-few-public-methods,no-member
                     self._tray_icon.update_menu()
                 except Exception:  # pylint: disable=broad-except
                     pass
+        elif action == "stop":
+            self._request_stop()
+        elif action == "cancel":
+            self._show_from_tray()   # the confirmation needs the window
+            self._request_cancel()
         elif action == "downloads":
             self._open_downloads_folder()
         elif action == "quit":

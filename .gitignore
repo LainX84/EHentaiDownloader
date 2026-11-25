@@ -205,6 +205,10 @@ URLs.txt
 failed_downloads.txt
 session.log
 session.log.*
+# single-instance lock of the desktop program (src/gui/single_instance.py)
+.instance.lock
+.instance.json
+.instance.json.tmp
 Downloads/
 temp/
 # web / Docker version run from the project folder (python -m src.web, docker/compose.yml)

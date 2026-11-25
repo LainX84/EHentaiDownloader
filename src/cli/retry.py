@@ -14,6 +14,7 @@ import asyncio
 import sys
 from urllib.parse import urlparse
 
+from src import hitomi
 from src.cli.downloader import download_album, initialize_managers, load_failed_urls, save_failed_urls
 from src.cli import PROJECT_ROOT
 from src.file_utils import rotate_session_log
@@ -43,8 +44,9 @@ def _is_album_url(url: str) -> bool:
     if not parsed.netloc:
         return False
 
-    # E-Hentai / ExHentai album pages are under /g/<id>/<token>/, nhentai ones under /g/<id>/
-    return "/g/" in parsed.path
+    # E-Hentai / ExHentai album pages are under /g/<id>/<token>/, nhentai ones under /g/<id>/,
+    # hitomi ones are /galleries/<id>.html (or a reader / title link of the gallery)
+    return "/g/" in parsed.path or bool(hitomi.gallery_id(url))
 
 
 def collect_retry_urls() -> list[str]:
