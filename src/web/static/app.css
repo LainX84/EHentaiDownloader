@@ -215,7 +215,7 @@ main { flex: 1; display: flex; flex-direction: column; padding: 10px 16px 0; gap
 .fav-tools { display: flex; gap: 8px; margin: 6px 0; }
 .fav-tools input { flex: 1; }
 .fav-list { height: 300px; }
-.fav-row { display: grid; grid-template-columns: 2em minmax(0, 1fr) minmax(14em, 1fr) 6em 3.5em; gap: 8px; align-items: center;
+.fav-row { display: grid; grid-template-columns: 2em minmax(0, 1fr) minmax(14em, 1fr) 6em 5.5em; gap: 8px; align-items: center;
   padding: 2px 8px; cursor: pointer; }
 .fav-row:hover { background: var(--tab-hover); }
 .fav-row.head { position: sticky; top: 0; background: var(--border); font-weight: 600; cursor: default; }
@@ -229,7 +229,13 @@ main { flex: 1; display: flex; flex-direction: column; padding: 10px 16px 0; gap
 .fav-moves { display: flex; gap: 2px; }
 .fav-row .move { background: none; border: 0; color: var(--accent); cursor: pointer; padding: 0 3px; font-size: 13px; }
 .fav-row .move:disabled { visibility: hidden; }
-.modal:has(.fav-dialog) { width: min(760px, 96vw); }
+.fav-row .fav-merged { color: var(--text-sec); font-weight: 400; overflow: hidden; text-overflow: ellipsis; }
+.fav-moves .fav-pos { color: var(--text-sec); font-size: 12px; min-width: 1.4em; text-align: right; }
+.fav-merge { align-items: center; }
+.fav-merge select { min-width: 12em; }
+.fav-nested { display: block; margin-left: 1.6em; }
+.fav-nested.off { opacity: .5; }
+.modal:has(.fav-dialog) { width: min(820px, 96vw); }
 
 /* links dragged onto the page */
 .drop-hint { position: fixed; inset: 0; z-index: 30; pointer-events: none; display: flex; align-items: center;

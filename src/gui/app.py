@@ -122,6 +122,7 @@ class EHentaiGUI(  # pylint: disable=too-many-ancestors,too-many-instance-attrib
         self._apply_download_folder(self._settings.get("download_folder") or "", initial=True)
         tag_utils.set_favorites(self._settings.get("favorite_tags") or [])
         tag_utils.set_folders_enabled(bool(self._settings.get("tag_folders", False)))
+        tag_utils.set_nested_folders(bool(self._settings.get("tag_folders_nested", False)))
         stats.load()
         atexit.register(stats.save, True)
 
@@ -616,6 +617,7 @@ class EHentaiGUI(  # pylint: disable=too-many-ancestors,too-many-instance-attrib
             "watch_clipboard": bool(self._watch_clipboard_var.get()),
             "check_updates": bool(self._check_updates_var.get()),
             "tag_folders": bool(self._tag_folders_var.get()),
+            "tag_folders_nested": tag_utils.nested_folders(),
             "minimize_to_tray": bool(self._minimize_to_tray_var.get()),
             "favorite_tags": tag_utils.get_favorites(),
         })
@@ -708,17 +710,21 @@ class EHentaiGUI(  # pylint: disable=too-many-ancestors,too-many-instance-attrib
         if self._guard_running():
             return
         gui_dialogs.FavoriteTagsDialog(self, self._palette(), DIALOG_FONTS, tag_utils.get_favorites(),
-                                       bool(self._tag_folders_var.get()), self._on_favorite_tags_saved)
+                                       bool(self._tag_folders_var.get()), self._on_favorite_tags_saved,
+                                       nested=tag_utils.nested_folders())
 
-    def _on_favorite_tags_saved(self, favorites: list[dict], folders: bool) -> None:
+    def _on_favorite_tags_saved(self, favorites: list[dict], folders: bool, nested: bool = False) -> None:
         """The favorite tags window was saved."""
         tag_utils.set_favorites(favorites)
         changed_folders = folders != bool(self._tag_folders_var.get())
+        changed_nested = nested != tag_utils.nested_folders()
         self._tag_folders_var.set(folders)
         tag_utils.set_folders_enabled(folders)
+        tag_utils.set_nested_folders(nested)
         self._save_settings()
-        names = ", ".join(tag_utils.badge_text(fav["label"]) for fav in favorites) or "none"
-        self._append_log(_ts(), "Settings", f"Favorite tags: {names}.")
+        self._append_log(_ts(), "Settings", f"Favorite tags: {tag_utils.favorites_summary(favorites)}.")
+        if changed_nested and folders:
+            self._append_log(_ts(), "Settings", tag_utils.nested_log_line(nested))
         if changed_folders:
             self._on_tag_folders_changed(save=False)
         self._redecorate_batch()
@@ -731,6 +737,8 @@ class EHentaiGUI(  # pylint: disable=too-many-ancestors,too-many-instance-attrib
         if self._tag_folders_var.get():
             text = ("Folders by favorite tag ON: a gallery with a favorite tag goes into "
                     "<site>/<label>/ (for example E-Hentai/Netorare/).")
+            if tag_utils.nested_folders():
+                text += " " + tag_utils.nested_log_line(True)
             if not tag_utils.get_favorites():
                 text += " No favorite tag is set yet: add them in Settings → Favorite tags…"
         else:

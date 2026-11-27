@@ -13,7 +13,7 @@ downloads, same files, same settings.
   and [GitHub Packages `ghcr.io/lainx84/ehentaidownloader`](https://github.com/LainX84/EHentaiDownloader/pkgs/container/ehentaidownloader)
   (same image on both)
 - **Architectures:** `linux/amd64` and `linux/arm64`
-- **Tags:** `latest` and the version (e.g. `2.2.0`); the image version is the same as the desktop program
+- **Tags:** `latest` and the version (e.g. `2.2.1`); the image version is the same as the desktop program
 
 > ⚠️ **No login.** The page is meant for the **home network only**: publish the port on the
 > LAN address of the server, never on the internet (no port forwarding, no public reverse proxy).
@@ -105,8 +105,9 @@ Everything of the desktop window, from any browser of the house:
   and Retry Failed are emptied), **Resume now** after an IP ban.
 - **Settings**: image format (Native / WEBP – default – / JPEG / JPEG XL / PNG / AVIF, all open and royalty-free), Auto Rename `01…N`, CBZ archive,
   ComicInfo.xml, **favorite tags** (tick them in the list of the tags met in your galleries, each with its
-  own label, colour and priority; shown in the lists) and **folders by favorite tag**
-  (`E-Hentai/<tag>/…`, `nhentai/<tag>/…`, `hitomi/<tag>/…`), speed (1x–5x), light / dark / automatic theme.
+  own label, colour and priority — the lowest number wins; similar tags can be merged into one favorite; shown in the lists) and **folders by favorite tag**
+  (`E-Hentai/<tag>/…`, `nhentai/<tag>/…`, `hitomi/<tag>/…`; optionally nested by priority:
+  `E-Hentai/Gender Bender/Netorare/…`), speed (1x–5x), light / dark / automatic theme.
 - **Status bar**: images downloaded **today** (the counter starts again every day at 06:00 and
   survives restarts), current speed, ban countdown.
 - **Log** with colours; *File → Open log file* shows `session.log`.

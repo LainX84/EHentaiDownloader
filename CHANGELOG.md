@@ -6,6 +6,25 @@ All notable changes to this fork of EHentai Downloader. Versions follow the rele
 
 ## [Unreleased]
 
+## [2.2.1] – 2026-11-27
+
+### Added
+- **Merged favorite tags** (desktop and Docker / web): several similar tags can count as one
+  favorite, with one label, one colour and one folder — e.g. *gender bender* + *gender morph* +
+  *gender change*, or *netorare* + *netorase* + *netori*. In *Settings → Favorite tags…* select a
+  tag, choose the favorite in *Merge into* and press *Merge* (web: *Merge … into …*); *Split* (✂)
+  separates them again. Typing `netorare, netorase, netori = NTR` in *Add a tag* does the same.
+  The *Galleries* column of a merged favorite counts each gallery once.
+- **Nested folders by priority**: with *Sort downloads into folders by favorite tag* on, the new
+  option *Nest the folders by priority* makes one folder level per favorite of the gallery, in
+  priority order (★ 1 outermost): `E-Hentai/Gender Bender/Netorare/<title>` (at most 5 levels).
+  Saved as `tag_folders_nested` in `settings.json`.
+
+### Changed
+- The favorite tags window and the log state the rule clearly: when a gallery has more than one
+  favorite, the **lowest number** (★ 1) decides the label and the folder. The log lists the
+  favorites with their position and merged tags.
+
 ## [2.2.0] – 2026-11-25
 
 ### Added
@@ -269,7 +288,8 @@ First release of the fork with ready-to-use apps.
 - **Start-up notice** (disclaimer: no warranty, developed with the help of Claude AI) with
   *Don't show this again for 30 days*; *Help* menu with GitHub page, license and about.
 
-[Unreleased]: https://github.com/LainX84/EHentaiDownloader/compare/v2.2.0...HEAD
+[Unreleased]: https://github.com/LainX84/EHentaiDownloader/compare/v2.2.1...HEAD
+[2.2.1]: https://github.com/LainX84/EHentaiDownloader/compare/v2.2.0...v2.2.1
 [2.2.0]: https://github.com/LainX84/EHentaiDownloader/compare/v2.1.0...v2.2.0
 [2.1.0]: https://github.com/LainX84/EHentaiDownloader/compare/v2.0.4...v2.1.0
 [2.0.4]: https://github.com/LainX84/EHentaiDownloader/compare/v2.0.3...v2.0.4

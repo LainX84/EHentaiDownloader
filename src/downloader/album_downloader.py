@@ -83,10 +83,14 @@ class AlbumDownloader(CbzArchiveMixin):
     @property
     def site_download_folder(self) -> Path:
         """Where this album goes when complete: Downloads/<site>, or Downloads/<site>/<favorite tag>
-        with Settings → "Sort downloads into folders by favorite tag"."""
-        folder = tag_utils.folder_for(self.gallery_tags)
-        name = sanitize_directory_name(folder) if folder else ""
-        return self.site_root_folder / name if name else self.site_root_folder
+        with Settings → "Sort downloads into folders by favorite tag" (one level per favorite of the
+        gallery, in priority order, with "Nest the folders by priority")."""
+        folder = self.site_root_folder
+        for part in tag_utils.folder_parts_for(self.gallery_tags):
+            name = sanitize_directory_name(part)
+            if name:
+                folder = folder / name
+        return folder
 
     @property
     def stats_site(self) -> str:

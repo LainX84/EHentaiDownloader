@@ -725,36 +725,73 @@ $("#stats-reset").addEventListener("click", async () => {
 async function showFavorites() {
   let data;
   try { data = await api("/api/tags"); } catch (err) { showError(err); return; }
-  const rows = new Map(data.tags.map((t) => [t.tag, { ...t }]));
+  // tag -> row; a tag merged into a favorite has `into` = that favorite (and is not listed on its own)
+  const rows = new Map(data.tags.map((t) => [t.tag, { ...t, merged: [...(t.merged || [])] }]));
   let order = data.tags.filter((t) => t.favorite).map((t) => t.tag);
+  const seenOf = new Map(data.tags.filter((t) => !t.favorite).map((t) => [t.tag, t.seen]));
+  const plain = (tag, into) => ({ tag, label: tag.split(":").pop(), color: "", favorite: false, merged: [],
+    seen: seenOf.get(tag) || seenOf.get(tag.split(":").pop()) || 0, suggested: false, into: into || "" });
+  order.forEach((f) => rows.get(f).merged.forEach((m) => { if (!rows.has(m)) rows.set(m, plain(m, f)); else rows.get(m).into = f; }));
   const width = data.badge_max;
   const badgeText = (label) => label.replace(/\|/g, "/").split(/\s+/).join(" ").trim().toUpperCase().slice(0, width).trim();
+  const normTag = (text) => text.trim().toLowerCase().replace(/[\s_]+/g, " ").replace(/\s*:\s*/, ":");
+  const nextColor = () => {
+    const used = new Set(order.map((t) => rows.get(t).color));
+    return data.colors.find((c) => !used.has(c)) || data.colors[order.length % data.colors.length];
+  };
+  const release = (f) => {  // the tags merged into a favorite become normal tags again
+    const r = rows.get(f);
+    r.merged.forEach((m) => rows.set(m, plain(m)));
+    r.merged = [];
+    r.seen = seenOf.get(f) || 0;
+  };
+  const mergeInto = (tag, target) => {  // tag (and its merged tags) now counts as the favorite target
+    if (!rows.has(tag)) rows.set(tag, plain(tag));
+    const r = rows.get(tag), goal = rows.get(target);
+    if (tag === target || r.into || !goal || !goal.favorite) return false;
+    const moved = [tag, ...r.merged];
+    moved.forEach((m) => { if (!rows.has(m)) rows.set(m, plain(m)); Object.assign(rows.get(m), { favorite: false, merged: [], into: target }); });
+    order = order.filter((t) => t !== tag);
+    goal.merged = [...new Set([...goal.merged, ...moved])];
+    goal.seen = [target, ...goal.merged].reduce((n, t) => n + (seenOf.get(t) || seenOf.get(t.split(":").pop()) || 0), 0);
+    return true;
+  };
 
   const filter = el("input", { type: "text", placeholder: "🔍 Filter", spellcheck: "false" });
-  const add = el("input", { type: "text", placeholder: "Add a tag (e.g. artist:name = Label)", spellcheck: "false" });
+  const add = el("input", { type: "text", placeholder: "Add a tag (e.g. artist:name = Label, or netorare, netori = NTR)", spellcheck: "false" });
   const count = el("div", { class: "note" });
   const table = el("div", { class: "list fav-list" });
   const folders = el("input", { type: "checkbox" });
   folders.checked = !!(S.settings && S.settings.tag_folders);
+  const nested = el("input", { type: "checkbox" });
+  nested.checked = !!(S.settings && S.settings.tag_folders_nested);
+  const nestedLabel = el("label", { class: "note fav-nested" }, nested,
+    ` Nest the folders by priority (one level per favorite of the gallery, ★ 1 outermost: <site>/Gender Bender/Netorare/<gallery>, max ${data.nest_max || 5} levels)`);
+  const syncNested = () => { nested.disabled = !folders.checked; nestedLabel.classList.toggle("off", !folders.checked); };
+  folders.addEventListener("change", syncNested);
+  syncNested();
+  // "Merge <tag> into <favorite>"
+  const mergeTag = el("input", { type: "text", placeholder: "Tag to merge (e.g. gender morph)", spellcheck: "false", list: "fav-merge-tags" });
+  const mergeList = el("datalist", { id: "fav-merge-tags" });
+  const mergeTarget = el("select", { title: "Favorite that the tag joins" });
 
   function draw() {
     const needle = filter.value.trim().toLowerCase();
-    const others = [...rows.values()].filter((r) => !r.favorite)
+    const others = [...rows.values()].filter((r) => !r.favorite && !r.into)
       .sort((a, b) => (a.suggested - b.suggested) || (b.seen - a.seen) || a.tag.localeCompare(b.tag));
     const list = [...order.map((t) => rows.get(t)), ...others];
     table.replaceChildren(el("div", { class: "fav-row head" }, el("span", { text: "★" }), el("span", { text: "Tag" }),
       el("span", { text: "Label" }), el("span", { text: "Galleries" }), el("span", { text: "" })));
     list.forEach((r) => {
-      if (needle && !r.tag.includes(needle) && !r.label.toLowerCase().includes(needle)) return;
+      const names = [r.tag, ...r.merged];
+      if (needle && !names.some((n) => n.includes(needle)) && !r.label.toLowerCase().includes(needle)) return;
       const box = el("input", { type: "checkbox" });
       box.checked = r.favorite;
       const badge = el("span", { class: "badge", text: badgeText(r.label), style: r.color ? `background:${r.color};color:${inkFor(r.color)}` : "" });
       box.addEventListener("change", () => {
+        if (!box.checked && r.merged.length) release(r.tag);
         r.favorite = box.checked;
-        if (r.favorite && !r.color) {
-          const used = new Set(order.map((t) => rows.get(t).color));
-          r.color = data.colors.find((c) => !used.has(c)) || data.colors[order.length % data.colors.length];
-        }
+        if (r.favorite && !r.color) r.color = nextColor();
         order = r.favorite ? [...order, r.tag] : order.filter((t) => t !== r.tag);
         draw();
       });
@@ -772,59 +809,88 @@ async function showFavorites() {
         label.addEventListener("change", () => { r.label = label.value.trim() || r.tag.split(":").pop(); draw(); });
         const i = order.indexOf(r.tag);
         moves = el("span", { class: "fav-moves" },
+          el("span", { class: "fav-pos", text: String(i + 1), title: "Priority: the lowest number wins" }),
           el("button", { class: "move", text: "▲", title: "Higher priority", disabled: i === 0,
-            onclick: () => { [order[i - 1], order[i]] = [order[i], order[i - 1]]; draw(); } }),
+            onclick: (e) => { e.preventDefault(); [order[i - 1], order[i]] = [order[i], order[i - 1]]; draw(); } }),
           el("button", { class: "move", text: "▼", title: "Lower priority", disabled: i === order.length - 1,
-            onclick: () => { [order[i + 1], order[i]] = [order[i], order[i + 1]]; draw(); } }));
+            onclick: (e) => { e.preventDefault(); [order[i + 1], order[i]] = [order[i], order[i + 1]]; draw(); } }),
+          r.merged.length ? el("button", { class: "move split", text: "✂", title: `Split: ${r.merged.join(", ")} become separate tags again`,
+            onclick: (e) => { e.preventDefault(); release(r.tag); draw(); } }) : null);
       }
+      const tagCell = el("span", { class: "fav-tag", title: names.join(" + ") }, r.tag,
+        r.merged.length ? el("span", { class: "fav-merged", text: `+ ${r.merged.join(" + ")}` }) : null,
+        r.favorite ? badge : null);
       table.append(el("label", { class: `fav-row${r.favorite ? " fav" : ""}${r.suggested ? " suggested" : ""}` },
-        box,
-        el("span", { class: "fav-tag" }, r.tag, r.favorite ? badge : null),
+        box, tagCell,
         el("span", { class: "fav-label" }, label, color),
         el("span", { class: "fav-seen", text: r.seen ? String(r.seen) : (r.suggested ? "suggested" : "") }),
         moves));
     });
     count.textContent = `${order.length} favorite${order.length !== 1 ? "s" : ""} · ${data.seen} tag${data.seen !== 1 ? "s" : ""} met in your galleries`;
+    // merge controls: every tag not merged yet / every favorite
+    mergeList.replaceChildren(...list.map((r) => el("option", { value: r.tag })));
+    const chosen = mergeTarget.value;
+    mergeTarget.replaceChildren(...order.map((t, i) => el("option", { value: t, text: `★ ${i + 1}  ${badgeText(rows.get(t).label)}` })));
+    if (order.includes(chosen)) mergeTarget.value = chosen;
+    mergeTarget.disabled = !order.length;
   }
   filter.addEventListener("input", draw);
   const addTag = () => {
     const [left, ...rest] = add.value.split("=");
-    const tag = left.trim().toLowerCase().replace(/[\s_]+/g, " ").replace(/\s*:\s*/, ":");
-    if (!tag) return;
+    const tags = left.split(",").map(normTag).filter(Boolean);
+    if (!tags.length) return;
+    const tag = tags[0];
     const name = tag.split(":").pop();
-    const key = rows.has(tag) ? tag : (!tag.includes(":") && rows.has(name) ? name : tag);
-    if (!rows.has(key)) rows.set(key, { tag: key, label: rest.join("=").trim() || name, color: "", favorite: false, seen: 0, suggested: false });
+    let key = rows.has(tag) ? tag : (!tag.includes(":") && rows.has(name) ? name : tag);
+    if (rows.has(key) && rows.get(key).into) key = rows.get(key).into;  // already merged: its favorite
+    if (!rows.has(key)) rows.set(key, plain(key));
     const r = rows.get(key);
     if (rest.join("=").trim()) r.label = rest.join("=").trim();
     if (!r.favorite) {
-      const used = new Set(order.map((t) => rows.get(t).color));
-      r.color = r.color || data.colors.find((c) => !used.has(c)) || data.colors[0];
+      r.color = r.color || nextColor();
       r.favorite = true;
       order.push(key);
     }
+    tags.slice(1).forEach((t) => mergeInto(rows.has(t) || t.includes(":") || !rows.has(t.split(":").pop()) ? t : t.split(":").pop(), key));
     add.value = "";
     filter.value = "";
     draw();
   };
   add.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); addTag(); } });
+  const doMerge = () => {
+    const typed = normTag(mergeTag.value);
+    if (!typed || !mergeTarget.value) return;
+    const key = rows.has(typed) || typed.includes(":") || !rows.has(typed.split(":").pop()) ? typed : typed.split(":").pop();
+    if (rows.has(key) && rows.get(key).into) { showError(new Error(`"${key}" is already merged into ${badgeText(rows.get(rows.get(key).into).label)}.`)); return; }
+    if (key === mergeTarget.value) return;
+    mergeInto(key, mergeTarget.value);
+    mergeTag.value = "";
+    draw();
+  };
+  mergeTag.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); doMerge(); } });
   draw();
 
   const body = el("div", { class: "fav-dialog" },
     el("p", { class: "note", text: "Tick a tag to make it a favorite. The list fills up by itself with the tags of every gallery " +
       "you verify or download (and how many galleries had them); a few common tags are offered from the start " +
       "(\"suggested\"), and you can add any tag yourself, e.g. an artist (artist:name)." }),
-    el("p", { class: "note", text: `Favorites show as a coloured label in the lists; when a gallery has more than one, the highest ` +
-      `wins (▲ ▼). Each favorite has its own label (capitals, max ${width} characters, also the folder name) and colour.` }),
+    el("p", { class: "note", text: `Favorites show as a coloured label in the lists; when a gallery has more than one, the lowest ` +
+      `number wins (1 beats 2; change it with ▲ ▼). Each favorite has its own label (capitals, max ${width} characters, also the folder name) and colour. ` +
+      `Similar tags can be merged into one favorite (e.g. gender bender + gender morph + gender change): ✂ splits them again.` }),
     el("div", { class: "fav-tools" }, filter, add, el("button", { class: "btn ghost", text: "＋ Add", onclick: addTag })),
     table, count,
+    el("div", { class: "fav-tools fav-merge" }, el("span", { class: "note", text: "Merge" }), mergeTag, mergeList,
+      el("span", { class: "note", text: "into" }), mergeTarget, el("button", { class: "btn ghost", text: "⇄ Merge", onclick: doMerge })),
     el("label", { class: "note" }, folders, " Sort downloads into folders by favorite tag (<site>/<label>/<gallery>)"),
+    nestedLabel,
     el("p", { class: "note", text: "Galleries without a favorite tag stay in E-Hentai/, nhentai/ or hitomi/. Lines already in the list get " +
       "their label after Verify Links." }));
   await modal("Favorite tags", body, [
     { label: "Cancel", value: false },
     { label: "Save", value: true, cls: "accent", action: async () => {
-      const favorites = order.map((t) => ({ tag: t, label: rows.get(t).label, color: rows.get(t).color }));
-      S.settings = await api("/api/settings", { favorite_tags: favorites, tag_folders: folders.checked });
+      const favorites = order.map((t) => ({ tag: t, label: rows.get(t).label, color: rows.get(t).color, merged: rows.get(t).merged }));
+      S.settings = await api("/api/settings", { favorite_tags: favorites, tag_folders: folders.checked,
+        tag_folders_nested: nested.checked });
       applySettings();
       poll();
     } },

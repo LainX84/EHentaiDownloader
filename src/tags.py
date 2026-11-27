@@ -8,9 +8,19 @@ Tags are kept as "namespace:name" strings, lower case, single spaces:
     nhentai               "tag:netorare", "artist:...", "language:english"
     hitomi                "female:big breasts", "male:...", "tag:full color", "artist:...", "language:english"
 
-Favorite tags (Settings → Favorite tags…) are a list of {"tag": ..., "label": ...}; the
-first favorite (in list order) found in a gallery is its "badge": shown in the lists and,
-with "Sort downloads into folders by favorite tag", the name of the sub-folder of the album.
+Favorite tags (Settings → Favorite tags…) are a list of {"tag", "label", "color", "merged"} in
+priority order (position 1 = most important). The first favorite (lowest position) found in a
+gallery is its "badge": shown in the lists and, with "Sort downloads into folders by favorite
+tag", the name of the sub-folder of the album.
+
+Merged tags: a favorite can stand for several tags ("merged": e.g. "gender bender" with
+"gender morph" and "gender change", or "netorare" with "netorase" and "netori"): a gallery
+with any of them gets that favorite (one label, one colour, one folder).
+
+Nested folders: with "Nest the folders by priority" every favorite of a gallery becomes a folder
+level, in priority order: Downloads/<site>/Gender Bender/Netorare/<gallery> (at most
+NEST_MAX_DEPTH levels). Without it only the first favorite is used.
+
 A favorite matches a gallery tag by name, whatever the namespace ("netorare" matches
 "female:netorare" and "tag:netorare"); "female:big breasts" matches that namespace only.
 """
@@ -27,6 +37,7 @@ from pathlib import Path
 from src import config
 
 BADGE_MAX = 20  # longest favorite label shown in the lists (the column is as wide as the longest one)
+NEST_MAX_DEPTH = 5  # most folder levels made by "Nest the folders by priority" (paths stay short)
 
 # Namespaces of tags that describe the content (the others are artist, language, parody...)
 CONTENT_NAMESPACES = {"female", "male", "mixed", "other", "misc", "tag", "f", "m", "x", "o", ""}
@@ -36,6 +47,7 @@ _SEP_RE = re.compile(r"[\s_]+")
 _lock = threading.RLock()
 _favorites: list[dict] = []
 _folders_enabled = False
+_nested_folders = False
 
 
 def normalize(tag: str) -> str:
@@ -139,20 +151,42 @@ def text_color(background: str) -> str:
     return "#1A1A1A" if luminance > 160 else "#FFFFFF"
 
 
-def _favorite(tag: str, label: str, color: str, index: int) -> dict | None:
-    """One clean favorite entry (None when the tag is empty)."""
+def _favorite(tag: str, label: str, color: str, index: int, merged=()) -> dict | None:
+    """One clean favorite entry (None when the tag is empty).
+
+    merged: other tags that count as this favorite (duplicates and empty ones are dropped).
+    """
     tag = normalize(tag)
     if not split(tag)[1]:
         return None
     label = " ".join(str(label or "").split()) or split(tag)[1]
     color = color if isinstance(color, str) and _COLOR_RE.match(color) else default_color(index)
-    return {"tag": tag, "label": label, "color": color.upper()}
+    if isinstance(merged, str):
+        merged = merged.split(",")
+    extra = [t for t in _unique(normalize(str(t)) for t in (merged or [])) if t != tag]
+    return {"tag": tag, "label": label, "color": color.upper(), "merged": extra}
+
+
+def favorite_tags(fav: dict) -> list[str]:
+    """Every tag of a favorite: its own one, then the merged ones."""
+    return [fav.get("tag", "")] + list(fav.get("merged") or [])
+
+
+def _add_favorite(favorites: list[dict], tags: list[str], label, color) -> None:
+    """Append a favorite made of tags (first = main one); tags already used by a favorite are skipped."""
+    used = {t for fav in favorites for t in favorite_tags(fav)}
+    free = [t for t in _unique(normalize(str(t)) for t in tags) if t not in used]
+    if free:
+        fav = _favorite(free[0], label, color, len(favorites), free[1:])
+        if fav:
+            favorites.append(fav)
 
 
 def parse_favorites(text: str) -> list[dict]:
     """Read favorites written as text, one per line ("tag" or "tag = label"; '#' starts a comment).
+    Tags separated by commas are merged into one favorite (the first one is the main tag).
 
-        netorare
+        netorare, netorase, netori = Netorare
         ai generated = AI
         female:big breasts = Big Boobs
     """
@@ -161,10 +195,8 @@ def parse_favorites(text: str) -> list[dict]:
         line = raw.split("#", 1)[0].strip()
         if not line:
             continue
-        tag, _, label = line.partition("=")
-        fav = _favorite(tag, label, "", len(favorites))
-        if fav and fav["tag"] not in {item["tag"] for item in favorites}:
-            favorites.append(fav)
+        tags, _, label = line.partition("=")
+        _add_favorite(favorites, tags.split(","), label, "")
     return favorites
 
 
@@ -173,7 +205,8 @@ def favorites_text(favorites: list[dict]) -> str:
     lines = []
     for fav in favorites or []:
         tag, label = fav.get("tag", ""), fav.get("label", "")
-        lines.append(tag if not label or label == split(tag)[1] else f"{tag} = {label}")
+        tags = ", ".join(favorite_tags(fav))
+        lines.append(tags if not label or label == split(tag)[1] else f"{tags} = {label}")
     return "\n".join(lines)
 
 
@@ -184,12 +217,15 @@ def clean_favorites(value) -> list[dict]:
     favorites: list[dict] = []
     for item in value:
         if isinstance(item, dict):
-            fav = _favorite(item.get("tag", ""), item.get("label", ""), item.get("color", ""), len(favorites))
+            merged = item.get("merged") or []
+            if isinstance(merged, str):
+                merged = merged.split(",")
+            if not isinstance(merged, list):
+                merged = []
+            _add_favorite(favorites, [item.get("tag", "")] + merged, item.get("label", ""), item.get("color", ""))
         else:
-            tag, _, label = str(item).partition("=")
-            fav = _favorite(tag, label, "", len(favorites))
-        if fav and fav["tag"] not in {entry["tag"] for entry in favorites}:
-            favorites.append(fav)
+            tags, _, label = str(item).partition("=")
+            _add_favorite(favorites, tags.split(","), label, "")
     return favorites
 
 
@@ -230,6 +266,17 @@ def folders_enabled() -> bool:
     return _folders_enabled
 
 
+def set_nested_folders(enabled: bool) -> None:
+    """Favorite tags window → "Nest the folders by priority"."""
+    global _nested_folders  # pylint: disable=global-statement
+    _nested_folders = bool(enabled)
+
+
+def nested_folders() -> bool:
+    """True when every favorite of a gallery is a folder level (in priority order)."""
+    return _nested_folders
+
+
 def _matches(favorite: str, tag: str) -> bool:
     """True when a gallery tag is the favorite one."""
     fav_ns, fav_name = split(favorite)
@@ -237,15 +284,38 @@ def _matches(favorite: str, tag: str) -> bool:
     return fav_name == tag_name and (not fav_ns or fav_ns == tag_ns)
 
 
-def favorite_for(tags: list[str] | None) -> dict | None:
-    """The first favorite (in priority order) found among the tags of a gallery, or None."""
+def favorites_for(tags: list[str] | None) -> list[dict]:
+    """Every favorite found among the tags of a gallery, in priority order (merged tags included)."""
     if not tags:
-        return None
+        return []
     normalized = [normalize(tag) for tag in tags]
-    for fav in get_favorites():
-        if any(_matches(fav["tag"], tag) for tag in normalized):
-            return fav
-    return None
+    return [fav for fav in get_favorites()
+            if any(_matches(own, tag) for own in favorite_tags(fav) for tag in normalized)]
+
+
+def favorite_for(tags: list[str] | None) -> dict | None:
+    """The first favorite (lowest position = highest priority) found in a gallery, or None."""
+    found = favorites_for(tags)
+    return found[0] if found else None
+
+
+def favorites_summary(favorites: list[dict]) -> str:
+    """Favorites for the log, in priority order: "1 GENDER BENDER (+gender morph, gender change), 2 NETORARE"."""
+    parts = []
+    for position, fav in enumerate(favorites or [], 1):
+        text = f"{position} {badge_text(fav.get('label', ''))}"
+        if fav.get("merged"):
+            text += f" (+{', '.join(fav['merged'])})"
+        parts.append(text)
+    return ", ".join(parts) or "none"
+
+
+def nested_log_line(nested: bool) -> str:
+    """Log line of the "Nest the folders by priority" option."""
+    if nested:
+        return ("Nested folders ON: every favorite of a gallery is a folder level, in priority order "
+                f"(for example E-Hentai/Gender Bender/Netorare/; at most {NEST_MAX_DEPTH} levels).")
+    return "Nested folders OFF: a gallery goes into the folder of its favorite with the highest priority."
 
 
 def badge_text(label: str) -> str:
@@ -260,12 +330,28 @@ def badge_for(tags: list[str] | None) -> str:
     return badge_text(fav["label"]) if fav else ""
 
 
-def folder_for(tags: list[str] | None) -> str:
-    """Name of the favorite-tag sub-folder of a gallery ('' = none, or the option is off)."""
+def folder_parts_for(tags: list[str] | None) -> list[str]:
+    """Favorite-tag sub-folders of a gallery, outermost first ([] = none, or the option is off).
+
+    One folder (the favorite with the highest priority), or one level per favorite of the gallery
+    in priority order with "Nest the folders by priority" (at most NEST_MAX_DEPTH).
+    """
     if not _folders_enabled:
-        return ""
-    fav = favorite_for(tags)
-    return fav["label"].strip() if fav else ""
+        return []
+    found = favorites_for(tags)
+    if not _nested_folders:
+        found = found[:1]
+    parts: list[str] = []
+    for fav in found:
+        label = fav["label"].strip()
+        if label and label not in parts:
+            parts.append(label)
+    return parts[:NEST_MAX_DEPTH]
+
+
+def folder_for(tags: list[str] | None) -> str:
+    """Favorite-tag sub-folder of a gallery as text ("Gender Bender/Netorare"; '' = none)."""
+    return "/".join(folder_parts_for(tags))
 
 
 # ---------------------------------------------------------------------------- tags seen
@@ -361,29 +447,48 @@ def catalog() -> list[dict]:
     """Every tag of the favorite tags window: the favorites first (in priority order), then the
     tags seen in the galleries (most frequent first), then the suggested ones never seen.
 
-    [{"tag", "label", "favorite", "seen", "suggested"}]
+    [{"tag", "label", "color", "favorite", "merged", "seen", "suggested"}]; the merged tags of a
+    favorite are not listed again on their own.
     """
     with _seen_lock:
         _ensure_seen()
         seen = dict(_seen)
+        galleries = list(_galleries.values())
     favorites = get_favorites()
     rows = []
     listed: set[str] = set()
     for fav in favorites:
         name = split(fav["tag"])[1]
+        own = favorite_tags(fav)
+        if fav["merged"]:  # galleries with any of the merged tags (each counted once)
+            count = sum(1 for tags in galleries
+                        if any(_matches(t, tag) for t in own for tag in tags if is_content_tag(tag)))
+            count = count or sum(seen.get(split(t)[1], 0) for t in own)
+        else:
+            count = seen.get(name, 0)
         rows.append({"tag": fav["tag"], "label": fav["label"], "color": fav["color"], "favorite": True,
-                     "seen": seen.get(name, 0), "suggested": name in SUGGESTED_TAGS and not seen.get(name)})
-        listed.add(fav["tag"])
-        listed.add(name)
+                     "merged": list(fav["merged"]), "seen": count,
+                     "suggested": name in SUGGESTED_TAGS and not count})
+        for tag in own:
+            listed.add(tag)
+            listed.add(split(tag)[1])
     for name, count in sorted(seen.items(), key=lambda item: (-item[1], item[0])):
         if name not in listed:
-            rows.append({"tag": name, "label": name, "color": "", "favorite": False, "seen": count,
-                         "suggested": False})
+            rows.append({"tag": name, "label": name, "color": "", "favorite": False, "merged": [],
+                         "seen": count, "suggested": False})
             listed.add(name)
     for name in sorted(SUGGESTED_TAGS):
         if name not in listed:
-            rows.append({"tag": name, "label": name, "color": "", "favorite": False, "seen": 0, "suggested": True})
+            rows.append({"tag": name, "label": name, "color": "", "favorite": False, "merged": [], "seen": 0,
+                         "suggested": True})
     return rows
+
+
+def seen_of(tag: str) -> int:
+    """In how many galleries a tag was met (by name, whatever the namespace)."""
+    with _seen_lock:
+        _ensure_seen()
+        return _seen.get(split(tag)[1], 0)
 
 
 def seen_count() -> int:

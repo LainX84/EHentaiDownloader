@@ -36,7 +36,7 @@ def test_catalog_lists_favorites_first_then_seen_then_suggested():
     rows = tags.catalog()
     assert [r["tag"] for r in rows[:3]] == ["netorare", "artist:someone", "glasses"]
     assert rows[0] == {"tag": "netorare", "label": "NTR", "color": tags.DEFAULT_COLORS[0], "favorite": True,
-                       "seen": 1, "suggested": False}
+                       "merged": [], "seen": 1, "suggested": False}
     assert rows[2]["seen"] == 2 and not rows[2]["favorite"]
     suggested = [r["tag"] for r in rows if r["suggested"]]
     assert "cheating" in suggested and "netorare" not in suggested
@@ -50,3 +50,15 @@ def test_tags_file_is_read_back(monkeypatch):
     tags._galleries.clear()
     assert tags.seen_count() == 1
     assert tags.cached_tags("g1") == ["female:sole female"]
+
+
+def test_merged_favorite_counts_each_gallery_once_and_hides_its_tags():
+    tags.record_gallery("g1", ["female:gender bender", "female:gender morph"])
+    tags.record_gallery("g2", ["female:gender morph"])
+    tags.record_gallery("g3", ["female:glasses"])
+    tags.set_favorites(tags.parse_favorites("gender bender, gender morph = Gender"))
+    rows = tags.catalog()
+    assert rows[0]["tag"] == "gender bender" and rows[0]["merged"] == ["gender morph"]
+    assert rows[0]["seen"] == 2  # g1 has both tags: counted once
+    assert "gender morph" not in [r["tag"] for r in rows[1:]]
+    assert tags.seen_of("female:gender morph") == 2

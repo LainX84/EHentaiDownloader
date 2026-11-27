@@ -38,7 +38,7 @@ LANE_LABELS = {throttle.SITE_EH: "E-Hentai/ExHentai", throttle.SITE_NH: "nhentai
 LANE_IDLE = "Idle"
 THEMES = ("auto", "light", "dark")
 
-BOOL_SETTINGS = ("auto_rename", "cbz_archive", "comic_info", "check_updates", "tag_folders")
+BOOL_SETTINGS = ("auto_rename", "cbz_archive", "comic_info", "check_updates", "tag_folders", "tag_folders_nested")
 
 COUNTER_RESET_HOUR = 6   # the "today" image counter starts again every day at 06:00
 COUNTER_SAVE_EVERY = 30  # seconds between saves of the counter while images are downloading
@@ -163,6 +163,7 @@ class Engine:
         set_comic_info(bool(self.settings.get("comic_info", config.CBZ_COMIC_INFO)))
         tag_utils.set_favorites(self.settings.get("favorite_tags") or [])
         tag_utils.set_folders_enabled(bool(self.settings.get("tag_folders", False)))
+        tag_utils.set_nested_folders(bool(self.settings.get("tag_folders_nested", False)))
         stats.load()
 
         # Running task: None, "single", "batch", "verify", "retry"
@@ -243,6 +244,7 @@ class Engine:
             "comic_info": bool(self.settings.get("comic_info", config.CBZ_COMIC_INFO)),
             "check_updates": bool(self.settings.get("check_updates", True)),
             "tag_folders": bool(self.settings.get("tag_folders", False)),
+            "tag_folders_nested": bool(self.settings.get("tag_folders_nested", False)),
             "favorite_tags": tag_utils.get_favorites(),
             "favorite_tags_text": tag_utils.favorites_text(tag_utils.get_favorites()),
             "speed": throttle.get_speed(),
@@ -266,7 +268,8 @@ class Engine:
                 self.settings["theme"] = changes["theme"]
             for key in BOOL_SETTINGS:
                 if key in changes:
-                    if key == "tag_folders" and self.mode:
+                    if key in ("tag_folders", "tag_folders_nested") and self.mode \
+                            and bool(changes[key]) != bool(self.settings.get(key, False)):
                         raise EngineError("A download is in progress: change the folders when it is over.")
                     self.settings[key] = bool(changes[key])
             if "favorite_tags" in changes:
@@ -282,6 +285,7 @@ class Engine:
                 self.settings["favorite_tags"] = favorites
                 tag_utils.set_favorites(favorites)
             tag_utils.set_folders_enabled(bool(self.settings.get("tag_folders", False)))
+            tag_utils.set_nested_folders(bool(self.settings.get("tag_folders_nested", False)))
             if "speed" in changes:
                 level = int(changes["speed"])
                 if level not in throttle.SPEED_LEVELS:
@@ -305,14 +309,15 @@ class Engine:
             self.log("Settings", "CBZ archive ON: each completed album is saved as a .cbz file."
                      if new["cbz_archive"] else "CBZ archive OFF: albums are saved as folders of images.")
         if new["favorite_tags"] != current["favorite_tags"]:
-            names = ", ".join(tag_utils.badge_text(fav["label"]) for fav in new["favorite_tags"]) or "none"
-            self.log("Settings", f"Favorite tags: {names}.")
+            self.log("Settings", f"Favorite tags: {tag_utils.favorites_summary(new['favorite_tags'])}.")
             self._call(self._refresh_badges)
         if new["tag_folders"] != current["tag_folders"]:
             self.log("Settings", "Folders by favorite tag ON: a gallery with a favorite tag goes into "
                                  "<site>/<label>/ (for example E-Hentai/Netorare/)."
                      if new["tag_folders"] else
                      "Folders by favorite tag OFF: every gallery goes into E-Hentai/, nhentai/ or hitomi/.")
+        if new["tag_folders_nested"] != current["tag_folders_nested"] and new["tag_folders"]:
+            self.log("Settings", tag_utils.nested_log_line(new["tag_folders_nested"]))
         if new["comic_info"] != current["comic_info"]:
             set_comic_info(new["comic_info"])
             self.log("Settings", "ComicInfo.xml ON: new CBZ archives include title, tags and source link."
@@ -1612,7 +1617,7 @@ class Engine:
     def tag_catalog() -> dict:
         """Favorite tags window: every tag met in the galleries, with the favorite ones first."""
         return {"tags": tag_utils.catalog(), "seen": tag_utils.seen_count(), "badge_max": tag_utils.BADGE_MAX,
-                "colors": list(tag_utils.DEFAULT_COLORS)}
+                "colors": list(tag_utils.DEFAULT_COLORS), "nest_max": tag_utils.NEST_MAX_DEPTH}
 
     @staticmethod
     def statistics() -> dict:

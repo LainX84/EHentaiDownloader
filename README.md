@@ -17,13 +17,13 @@
 
 ---
 
-## What's new in 2.2.0
+## What's new in 2.2.1
 
-- 🌐 **hitomi.la** as a fourth site (desktop, Docker / web and command line): no account or cookies needed, titles as `[Artist] Title`, its own download lane and a **cautious pace** (fewer images at a time, pauses after each image and an extra 45–60 s wait on a *soft ban*) to avoid IP bans.
-- ⏹ **Stop** (the galleries in progress finish, the rest stays in the list) and ✖ **Cancel** (everything stops at once, after a confirmation), on desktop, web and in the tray menu.
-- 🪟 **One window only** (desktop): starting the program again brings the open window to the front instead of opening a second copy.
-- ❓ **Confirmation before closing** (desktop) when downloads are running, links are waiting in the batch list or failed downloads are waiting to be retried.
-- 🖱️ **Drag and drop of links anywhere** on the desktop window and on the web page; Pause / Stop / Cancel are now next to the progress bars.
+- 🏷️ **Merged favorite tags**: similar tags can count as one favorite, with one label, colour and folder (*gender bender + gender morph + gender change*, *netorare + netorase + netori*): *Merge into* / *Split* in **Settings → Favorite tags…**, or type `netorare, netorase, netori = NTR`.
+- 🥇 **Clear priority**: when a gallery has more than one favorite, the lowest number (★ 1) decides the label and the folder.
+- 📂 **Nested folders by priority** (optional): one folder level per favorite of the gallery, ★ 1 outermost: `E-Hentai/Gender Bender/Netorare/<title>` (at most 5 levels).
+
+Desktop and Docker / web alike.
 
 All changes, also of earlier versions: [CHANGELOG.md](CHANGELOG.md).
 
@@ -39,7 +39,7 @@ All changes, also of earlier versions: [CHANGELOG.md](CHANGELOG.md).
 - 🔽 **Background downloads in the system tray** (Windows, Linux): minimize the window and it goes to the tray icon (next to the clock), with *Show*, *Pause / Resume*, *Stop*, *Cancel*, *Open Downloads* and *Quit*; the tooltip shows what is downloading and a notification says when the downloads are finished (**Settings → Minimize to system tray**, ON by default). On macOS the window is minimized to the Dock as usual (downloads go on there too).
 - 📥 **Quick link input**: paste text with links (Ctrl+V in the batch list), drag links or text files anywhere onto the window (also during a download), or let the clipboard watcher collect every gallery link you copy.
 - 🗂️ **One folder per site**: `Downloads/E-Hentai/<title>`, `Downloads/nhentai/<title>` and `Downloads/hitomi/<title>` (or `.cbz`). Albums and archives made by older versions directly in `Downloads/` are still recognised. The `Downloads` folder itself can be anywhere (**Settings → Download folder…**).
-- 🏷️ **Favorite tags**: the tags of each gallery are read from the site and collected in a list where you tick your favorites (**Settings → Favorite tags…**); they stand out in the lists and, if you want, decide the sub-folder: `Downloads/E-Hentai/Netorare/<title>`.
+- 🏷️ **Favorite tags**: the tags of each gallery are read from the site and collected in a list where you tick your favorites (**Settings → Favorite tags…**); they stand out in the lists and, if you want, decide the sub-folder: `Downloads/E-Hentai/Netorare/<title>`. Similar tags can be **merged** into one favorite (*gender bender + gender morph + gender change*), the favorite with the lowest number wins, and folders can be **nested by priority** (`E-Hentai/Gender Bender/Netorare/<title>`).
 - 📊 **Statistics**: galleries, images, size, time and speed (average, peak, now) since the first start and for this session, per site, and the most downloaded tags.
 - 🖼️ **Image format conversion**
   - **Native (Original)**: each image is saved exactly as the server sends it, without any change.
@@ -183,8 +183,8 @@ python EHentaiDownloader.pyw
 | **Settings → CBZ archive** | ON/OFF: save each completed album as `Downloads/<site>/<gallery title>.cbz` instead of a folder of images. |
 | **Settings → ComicInfo.xml in CBZ** | ON/OFF (default OFF): also put a `ComicInfo.xml` (title, page count, source link) inside each new CBZ, for readers that use it. |
 | **Settings → Download folder…** | Where the finished albums go (default: `Downloads` next to `URLs.txt`); `E-Hentai/`, `nhentai/` and `hitomi/` are made inside it. *Use the default download folder* goes back to `Downloads`. Albums still downloading stay in `temp/`. |
-| **Settings → Favorite tags…** | List of the tags met in your galleries, with a selector (☐ / ★) next to each one: tick the ones to highlight. The list **fills up as you verify or download galleries** (their tags are saved in `tags.json`, with how many galleries had them); before the first downloads it offers only a few common tags ("suggested"), and you can add any tag by hand (also `artist:name`). Each favorite has a label (shown in capitals, at most 20 characters, also the folder name), **its own colour** (*Colour…*) and a priority (▲ ▼): when a gallery has more than one favorite, the highest wins. The tags of every gallery are remembered, so the lists follow a new priority also after a restart. A favorite matches the tag on every site; `female:big breasts` matches that namespace only. |
-| **Settings → Sort downloads into folders by favorite tag** | ON/OFF (default OFF): a gallery with a favorite tag goes into `Downloads/<site>/<label>/<title>`, the others stay in `Downloads/<site>/`. |
+| **Settings → Favorite tags…** | List of the tags met in your galleries, with a selector (☐ / ★) next to each one: tick the ones to highlight. The list **fills up as you verify or download galleries** (their tags are saved in `tags.json`, with how many galleries had them); before the first downloads it offers only a few common tags ("suggested"), and you can add any tag by hand (also `artist:name`). Each favorite has a label (shown in capitals, at most 20 characters, also the folder name), **its own colour** (*Colour…*) and a priority (▲ ▼): when a gallery has more than one favorite, the **lowest number** wins (★ 1 beats ★ 2) for the label and the folder. **Merge**: select a tag, choose a favorite in *Merge into* and press *Merge* — the tags then count as that favorite (one label, colour and folder; e.g. *gender bender + gender morph + gender change*, *netorare + netorase + netori*); *Split* separates them. In *Add a tag* you can also type `netorare, netorase, netori = NTR`. The tags of every gallery are remembered, so the lists follow a new priority also after a restart. A favorite matches the tag on every site; `female:big breasts` matches that namespace only. |
+| **Settings → Sort downloads into folders by favorite tag** | ON/OFF (default OFF): a gallery with a favorite tag goes into `Downloads/<site>/<label>/<title>`, the others stay in `Downloads/<site>/`. With **Nest the folders by priority** (in the *Favorite tags* window, default OFF) every favorite of the gallery is a folder level in priority order, ★ 1 outermost: a gallery with *netorare* and *gender morph* goes into `Downloads/E-Hentai/Gender Bender/Netorare/<title>` (at most 5 levels). |
 | **Settings → Watch clipboard for links** | ON/OFF (default OFF): every gallery link you copy (also several at once, inside any text) is added to the batch list, skipping galleries already listed. Links copied before you turn it on are ignored. |
 | **Settings → Minimize to system tray** | ON/OFF (default ON; Windows and Linux): minimizing the window hides it in the system tray (next to the clock) and the downloads go on in the background. Click the tray icon (or *Show EHentai Downloader* in its menu) to bring the window back; the menu also has *Pause / Resume downloads*, *Stop after the current galleries*, *Cancel all downloads…*, *Open Downloads* and *Quit*. The tooltip shows what is downloading, and a notification says when the downloads are finished. Closing the window while a download runs asks: *Yes* keeps downloading in the tray, *No* stops and closes (see *Closing the program* below). Greyed out on macOS (the window goes to the Dock as usual) or when `pystray` / a system tray is missing. |
 | **Settings → Speed** | 1x Very slow … 5x Very fast (default 3x Normal), also shown bottom right (click it to change). Lower it if you get temporary IP bans. The request pace changes at once, the number of parallel downloads from the next album. |
@@ -309,8 +309,8 @@ The archive for your system is written to `release/` (PyInstaller can only build
 **Publishing a release** (maintainers): set `APP_VERSION` in `src/config.py`, add a section to `CHANGELOG.md`, commit, then push a tag with the same version:
 
 ```bash
-git tag v2.2.0
-git push origin v2.2.0
+git tag v2.2.1
+git push origin v2.2.1
 ```
 
 The GitHub workflow `.github/workflows/release.yml` builds Windows, macOS (Apple Silicon and Intel) and Linux on GitHub's servers and attaches the four archives to a new release with generated notes. *Actions → Build release → Run workflow* makes a test build without publishing (the archives can be downloaded from the run page).

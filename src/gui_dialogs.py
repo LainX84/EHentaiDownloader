@@ -397,9 +397,12 @@ FAVORITE_TAGS_HELP = (
     "Click ☐ / ★ (or double-click, Space) to make a tag a favorite. The list fills up by itself with "
     "the tags of every gallery you verify or download (and how many galleries had them); a few common "
     "tags are offered from the start (\"suggested\"), and you can add any tag, e.g. artist:name.\n"
-    "Favorites show as a coloured label in the lists; with more than one, the highest wins (▲ ▼). "
+    "Favorites show as a coloured label in the lists; when a gallery has more than one, the lowest "
+    "number wins (★ 1 beats ★ 2; change it with ▲ ▼). "
     f"Select a favorite to change its label (capitals, max {tag_utils.BADGE_MAX} characters, also the "
-    "folder name) and its colour. Drag the column borders to resize them."
+    "folder name) and its colour. To merge similar tags into one favorite (e.g. gender bender + gender "
+    "morph + gender change), select a tag, choose the favorite in \"Merge into\" and press Merge; "
+    "Split separates them again. Drag the column borders to resize them."
 )
 
 
@@ -410,19 +413,26 @@ class FavoriteTagsDialog:  # pylint: disable=too-few-public-methods,too-many-ins
                ("seen", "Galleries", 80, "e"))
 
     def __init__(self, root, palette: dict, fonts: dict, favorites: list[dict], folders: bool,  # pylint: disable=too-many-arguments,too-many-positional-arguments
-                 on_saved) -> None:
-        """on_saved(favorites, folders) is called with the new values."""
+                 on_saved, nested: bool = False) -> None:
+        """on_saved(favorites, folders, nested) is called with the new values."""
         self.palette, self.fonts, self.on_saved = palette, fonts, on_saved
         tag_utils.set_favorites(favorites)
-        # tag -> {"tag", "label", "favorite", "seen", "suggested"}; favorites keep their order
+        # tag -> {"tag", "label", "color", "favorite", "merged", "seen", "suggested"[, "into"]};
+        # favorites keep their order; a tag merged into a favorite has "into" = that favorite
         self.rows = {row["tag"]: row for row in tag_utils.catalog()}
         self.order = [row["tag"] for row in self.rows.values() if row["favorite"]]
+        for fav in list(self.order):
+            for member in self.rows[fav]["merged"]:
+                self.rows[member] = self._plain_row(member, into=fav)
         self.folders = tk.BooleanVar(value=folders)
+        self.nested = tk.BooleanVar(value=nested)
+        self.merge_target = tk.StringVar()
+        self._merge_targets: dict[str, str] = {}  # text of the "Merge into" menu -> favorite
         self.filter = tk.StringVar()
         self.new_tag = tk.StringVar()
         self.label = tk.StringVar()
         self._label_tag: str | None = None  # favorite whose label is in the entry
-        self.win = _dialog(root, f"{APP_NAME} – Favorite tags", palette, 760, 660)
+        self.win = _dialog(root, f"{APP_NAME} – Favorite tags", palette, 780, 740)
         self._build()
         self._refresh()
         self.filter.trace_add("write", lambda *_: self._refresh())
@@ -499,11 +509,33 @@ class FavoriteTagsDialog:  # pylint: disable=too-few-public-methods,too-many-ins
                                    font=fonts["small"], command=self._choose_color)
         self.color_btn.pack(side="left", padx=(12, 0))
 
+        # Merge the selected tag into a favorite / split a merged favorite
+        merge = tk.Frame(inner, bg=palette["PANEL"])
+        merge.pack(fill="x", pady=(6, 0))
+        tk.Label(merge, text="Merge the selected tag into:", bg=palette["PANEL"], fg=palette["TEXT_SEC"],
+                 font=fonts["small"]).pack(side="left")
+        self.merge_box = ttk.Combobox(merge, textvariable=self.merge_target, state="disabled", width=26,
+                                      font=fonts["ui"])
+        self.merge_box.pack(side="left", padx=6)
+        self.merge_btn = ttk.Button(merge, text="⇄ Merge", style="Ghost.TButton", width=0, state="disabled",
+                                    command=self._merge)
+        self.merge_btn.pack(side="left")
+        self.split_btn = ttk.Button(merge, text="Split", style="Ghost.TButton", width=0, state="disabled",
+                                    command=self._split)
+        self.split_btn.pack(side="left", padx=(10, 0))
+
+        options = {"bg": palette["PANEL"], "fg": palette["TEXT"], "font": fonts["small"],
+                   "activebackground": palette["PANEL"], "selectcolor": palette["PANEL"],
+                   "highlightthickness": 0, "anchor": "w"}
         tk.Checkbutton(inner, text="Sort downloads into folders by favorite tag "
                                    "(Downloads/<site>/<label>/<gallery>)",
-                       variable=self.folders, bg=palette["PANEL"], fg=palette["TEXT"], font=fonts["small"],
-                       activebackground=palette["PANEL"], selectcolor=palette["PANEL"],
-                       highlightthickness=0, anchor="w").pack(fill="x", pady=(8, 0))
+                       variable=self.folders, command=self._on_folders, **options).pack(fill="x", pady=(8, 0))
+        self.nested_chk = tk.Checkbutton(
+            inner, text="Nest the folders by priority: one level per favorite of the gallery, ★ 1 outermost "
+                        f"(<site>/Gender Bender/Netorare/<gallery>, max {tag_utils.NEST_MAX_DEPTH} levels)",
+            variable=self.nested, wraplength=640, justify="left", **options)
+        self.nested_chk.pack(fill="x", padx=(20, 0))
+        self._on_folders()
         tk.Label(inner, text="Galleries without a favorite tag stay in Downloads/<site>. Lines already in the "
                              "batch list get their label after Verify Links.",
                  bg=palette["PANEL"], fg=palette["TEXT_SEC"], font=fonts["small"], justify="left", anchor="w",
@@ -519,14 +551,16 @@ class FavoriteTagsDialog:  # pylint: disable=too-few-public-methods,too-many-ins
         """Rebuild the rows: favorites first (in priority order), then the others."""
         needle = self.filter.get().strip().lower()
         self.tree.delete(*self.tree.get_children())
-        others = [tag for tag, row in self.rows.items() if not row["favorite"]]
+        others = [tag for tag, row in self.rows.items() if not row["favorite"] and not row.get("into")]
         others.sort(key=lambda tag: (self.rows[tag]["suggested"], -self.rows[tag]["seen"], tag))
         for position, tag in enumerate(self.order + others):
             row = self.rows[tag]
-            if needle and needle not in tag and needle not in row["label"].lower():
+            names = [tag] + list(row.get("merged") or [])
+            if needle and not any(needle in name for name in names) and needle not in row["label"].lower():
                 continue
             if row["favorite"]:
-                values = (f"★ {position + 1}", tag, tag_utils.badge_text(row["label"]), row["seen"] or "")
+                values = (f"★ {position + 1}", " + ".join(names), tag_utils.badge_text(row["label"]),
+                          row["seen"] or "")
                 color_tag = f"color_{row['color'][1:]}"
                 # the row has the colour of its label in the lists
                 self.tree.tag_configure(color_tag, background=row["color"], foreground=tag_utils.text_color(row["color"]))
@@ -561,6 +595,8 @@ class FavoriteTagsDialog:  # pylint: disable=too-few-public-methods,too-many-ins
             return
         self._apply_label()
         row = self.rows[tag]
+        if row["favorite"] and row.get("merged"):  # the merged tags go back to the list
+            self._release(tag)
         row["favorite"] = not row["favorite"]
         if row["favorite"]:
             used = {self.rows[t]["color"] for t in self.order}
@@ -584,6 +620,71 @@ class FavoriteTagsDialog:  # pylint: disable=too-few-public-methods,too-many-ins
         index = self.order.index(tag) if is_fav else -1
         self.up_btn.configure(state="normal" if is_fav and index > 0 else "disabled")
         self.down_btn.configure(state="normal" if is_fav and index < len(self.order) - 1 else "disabled")
+        # "Merge into": every other favorite
+        self._merge_targets = {f"★ {i + 1}  {tag_utils.badge_text(self.rows[fav]['label'])}": fav
+                               for i, fav in enumerate(self.order) if fav != tag}
+        choices = list(self._merge_targets)
+        self.merge_box.configure(values=choices, state="readonly" if tag and choices else "disabled")
+        if self.merge_target.get() not in self._merge_targets:
+            self.merge_target.set(choices[0] if tag and choices else "")
+        self.merge_btn.configure(state="normal" if tag and choices else "disabled")
+        self.split_btn.configure(state="normal" if is_fav and self.rows[tag].get("merged") else "disabled")
+
+    # ------------------------------------------------------------------ merge / split / nest
+
+    @staticmethod
+    def _plain_row(tag: str, into: str | None = None) -> dict:
+        """Row of a tag that is not a favorite (into: favorite it is merged into)."""
+        row = {"tag": tag, "label": tag_utils.split(tag)[1], "color": "", "favorite": False, "merged": [],
+               "seen": tag_utils.seen_of(tag), "suggested": False}
+        if into:
+            row["into"] = into
+        return row
+
+    def _merge(self) -> None:
+        """'Merge': the selected tag (and the tags merged into it) counts as the chosen favorite."""
+        tag, target = self._selected(), self._merge_targets.get(self.merge_target.get())
+        if not tag or not target or tag == target or tag not in self.rows:
+            return
+        self._apply_label()
+        self._merge_into(tag, target)
+        self._refresh(select=target)
+
+    def _merge_into(self, tag: str, target: str) -> None:
+        """Move a tag (and the tags merged into it) into the favorite target."""
+        self.rows.setdefault(tag, self._plain_row(tag))
+        row, goal = self.rows[tag], self.rows[target]
+        if row.get("into") or tag == target:
+            return
+        moved = [tag] + list(row.get("merged") or [])
+        for member in moved:
+            self.rows.setdefault(member, self._plain_row(member))
+            self.rows[member].update(favorite=False, merged=[], into=target)
+        if tag in self.order:
+            self.order.remove(tag)
+        goal["merged"] = list(dict.fromkeys(list(goal.get("merged") or []) + moved))
+        # galleries with each tag, added up (one with two merged tags counts twice until reopened)
+        goal["seen"] = sum(tag_utils.seen_of(t) for t in [target] + goal["merged"])
+
+    def _release(self, tag: str) -> None:
+        """The tags merged into a favorite become normal tags again."""
+        row = self.rows[tag]
+        for member in row.get("merged") or []:
+            self.rows[member] = self._plain_row(member)
+        row["merged"] = []
+        row["seen"] = tag_utils.seen_of(tag)
+
+    def _split(self) -> None:
+        """'Split': the selected favorite keeps only its own tag."""
+        tag = self._selected()
+        if tag and self.rows.get(tag, {}).get("merged"):
+            self._apply_label()
+            self._release(tag)
+            self._refresh(select=tag)
+
+    def _on_folders(self) -> None:
+        """The nesting option needs the folders by favorite tag."""
+        self.nested_chk.configure(state="normal" if self.folders.get() else "disabled")
 
     def _apply_label(self) -> None:
         """Store the label typed for the selected favorite."""
@@ -626,23 +727,32 @@ class FavoriteTagsDialog:  # pylint: disable=too-few-public-methods,too-many-ins
         tag = parsed[0]["tag"]
         name = tag_utils.split(tag)[1]
         existing = tag if tag in self.rows else (name if name in self.rows and ":" not in tag else None)
+        if existing is not None and self.rows[existing].get("into"):  # already merged into a favorite
+            self.new_tag.set("")
+            self.filter.set("")
+            self._refresh(select=self.rows[existing]["into"])
+            return
         if existing is None:
             self.rows[tag] = {"tag": tag, "label": parsed[0]["label"], "color": "", "favorite": False,
-                              "seen": 0, "suggested": False}
+                              "merged": [], "seen": 0, "suggested": False}
             existing = tag
         self.new_tag.set("")
         self.filter.set("")
         if not self.rows[existing]["favorite"]:
             self._toggle(existing)
-        else:
-            self._refresh(select=existing)
+        for member in parsed[0]["merged"]:  # "a, b, c = Label" merges b and c into a
+            if member in self.rows or tag_utils.split(member)[1] not in self.rows or ":" in member:
+                self._merge_into(member, existing)
+            else:
+                self._merge_into(tag_utils.split(member)[1], existing)
+        self._refresh(select=existing)
 
     def _save(self) -> None:
         self._apply_label()
-        favorites = [{"tag": tag, "label": self.rows[tag]["label"], "color": self.rows[tag]["color"]}
-                     for tag in self.order]
+        favorites = [{"tag": tag, "label": self.rows[tag]["label"], "color": self.rows[tag]["color"],
+                      "merged": list(self.rows[tag].get("merged") or [])} for tag in self.order]
         self.win.destroy()
-        self.on_saved(tag_utils.clean_favorites(favorites), bool(self.folders.get()))
+        self.on_saved(tag_utils.clean_favorites(favorites), bool(self.folders.get()), bool(self.nested.get()))
 
 
 def platform_note() -> str:

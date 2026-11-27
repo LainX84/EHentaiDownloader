@@ -26,6 +26,7 @@ def _reset_favorites():
     yield
     tags.set_favorites([])
     tags.set_folders_enabled(False)
+    tags.set_nested_folders(False)
 
 
 def test_ehentai_tags_are_read_from_the_taglist():
@@ -113,3 +114,70 @@ def test_albums_go_into_the_favorite_tag_folder():
 def test_download_folder_can_change_at_runtime(monkeypatch):
     monkeypatch.setattr(config, "DOWNLOAD_FOLDER", "/mnt/nas/galleries")
     assert _bare(AlbumDownloader, "A", []).site_download_folder == Path("/mnt/nas/galleries") / EHENTAI_SUBFOLDER
+
+
+def test_lowest_position_wins_whatever_the_order_of_the_gallery_tags():
+    tags.set_favorites(tags.parse_favorites("gender bender = Gender Bender\nnetorare = Netorare\nmind control"))
+    tags.set_folders_enabled(True)
+    gallery = ["female:mind control", "female:netorare", "male:gender bender"]
+    assert tags.badge_for(gallery) == "GENDER BENDER"
+    assert tags.folder_for(gallery) == "Gender Bender"
+    assert [f["label"] for f in tags.favorites_for(gallery)] == ["Gender Bender", "Netorare", "mind control"]
+
+
+def test_merged_tags_count_as_one_favorite():
+    favorites = tags.parse_favorites("gender bender, gender morph, Gender_Change = Gender\n"
+                                     "netorare, netorase, netori = NTR\nnetori\n")
+    assert [(f["tag"], f["merged"], f["label"]) for f in favorites] == [
+        ("gender bender", ["gender morph", "gender change"], "Gender"),
+        ("netorare", ["netorase", "netori"], "NTR"),
+    ]  # "netori" alone is already merged into NTR: dropped
+    assert tags.parse_favorites(tags.favorites_text(favorites)) == favorites
+    tags.set_favorites(favorites)
+    tags.set_folders_enabled(True)
+    assert tags.badge_for(["female:gender morph"]) == "GENDER"
+    assert tags.badge_for(["tag:netori", "female:gender change"]) == "GENDER"
+    assert tags.folder_for(["female:netorase"]) == "NTR"
+
+
+def test_merged_favorites_from_settings_are_cleaned():
+    favorites = tags.clean_favorites([
+        {"tag": "gender bender", "label": "Gender", "color": "#123456", "merged": ["Gender Morph", "gender bender", ""]},
+        {"tag": "gender morph", "label": "dup"},           # already merged above: dropped
+        {"tag": "netorare", "merged": "netorase, netori"},  # text is accepted too
+        {"tag": "glasses"},                                 # favorites saved before merging existed
+    ])
+    assert [(f["tag"], f["merged"]) for f in favorites] == [
+        ("gender bender", ["gender morph"]), ("netorare", ["netorase", "netori"]), ("glasses", []),
+    ]
+
+
+def test_nested_folders_follow_the_priority():
+    tags.set_favorites(tags.parse_favorites("gender bender, gender morph = Gender Bender\nnetorare = Netorare\n"
+                                            "mind control = Mind Control"))
+    tags.set_folders_enabled(True)
+    gallery = ["female:mind control", "female:netorare", "female:gender morph"]
+    assert tags.folder_parts_for(gallery) == ["Gender Bender"]
+    tags.set_nested_folders(True)
+    assert tags.folder_parts_for(gallery) == ["Gender Bender", "Netorare", "Mind Control"]
+    assert tags.folder_for(["female:netorare"]) == "Netorare"
+    downloads = Path(config.DOWNLOAD_FOLDER)
+    assert _bare(AlbumDownloader, "A", gallery).site_download_folder == \
+        downloads / EHENTAI_SUBFOLDER / "Gender Bender" / "Netorare" / "Mind Control"
+    cbz = _bare(NHentaiAlbumDownloader, "T", ["tag:netorare", "tag:gender bender"])._cbz_path()
+    assert cbz == downloads / NHENTAI_SUBFOLDER / "Gender Bender" / "Netorare" / "T.cbz"
+    tags.set_folders_enabled(False)
+    assert tags.folder_parts_for(gallery) == []
+
+
+def test_nested_folders_are_capped():
+    tags.set_favorites(tags.parse_favorites("\n".join(f"t{i}" for i in range(8))))
+    tags.set_folders_enabled(True)
+    tags.set_nested_folders(True)
+    assert len(tags.folder_parts_for([f"tag:t{i}" for i in range(8)])) == tags.NEST_MAX_DEPTH
+
+
+def test_favorites_summary_for_the_log():
+    favorites = tags.parse_favorites("gender bender, gender morph = Gender\nnetorare")
+    assert tags.favorites_summary(favorites) == "1 GENDER (+gender morph), 2 NETORARE"
+    assert tags.favorites_summary([]) == "none"
