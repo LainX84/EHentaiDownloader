@@ -167,7 +167,7 @@ def test_nested_folders_follow_the_priority():
     cbz = _bare(NHentaiAlbumDownloader, "T", ["tag:netorare", "tag:gender bender"])._cbz_path()
     assert cbz == downloads / NHENTAI_SUBFOLDER / "Gender Bender" / "Netorare" / "T.cbz"
     tags.set_folders_enabled(False)
-    assert tags.folder_parts_for(gallery) == []
+    assert not tags.folder_parts_for(gallery)
 
 
 def test_nested_folders_are_capped():
